@@ -11,6 +11,7 @@
     "audit:selector": "node scripts/audit/verify-selector-evidence.mjs",
     "audit:compare": "node scripts/audit/compare-releases.mjs",
     "audit:global": "node scripts/audit/verify-global-release.mjs",
+    "audit:queue": "node scripts/audit/list-audit-queue.mjs",
     "audit:cross-country": "node scripts/audit/verify-cross-country.mjs",
     "audit:region": "node scripts/audit/verify-region-audit.mjs",
     "audit:snapshot-source": "node scripts/audit/snapshot-source-manifest.mjs",

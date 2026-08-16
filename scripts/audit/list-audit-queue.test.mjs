@@ -198,6 +198,11 @@ describe('buildAuditQueue', () => {
 });
 
 describe('snapshot-backed CLI input', () => {
+  it('exposes the audit queue as a stable package command', async () => {
+    const packageDocument = JSON.parse(await readFile('package.json', 'utf8'));
+    expect(packageDocument.scripts?.['audit:queue']).toBe('node scripts/audit/list-audit-queue.mjs');
+  });
+
   it('requires both release and snapshot arguments', () => {
     expect(() => parseAuditQueueArguments(['--release', '2026-06-17.0'])).toThrow(/SNAPSHOT_REQUIRED/);
     expect(parseAuditQueueArguments([
