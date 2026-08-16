@@ -56,8 +56,28 @@ describe('GeoNames city data builder', () => {
     await writeFile(
       citiesPath,
       [
-        cityRow(['2867714', 'München', 'Munich', 'Muenchen,Munich', '48.13743', '11.57549', 'DE', '02', '1260391']),
-        cityRow(['3448439', 'São Paulo', 'Sao Paulo', 'Sampa', '-23.5475', '-46.63611', 'BR', '27', '12400232']),
+        cityRow([
+          '2867714',
+          'München',
+          'Munich',
+          'Muenchen,Munich,慕尼黑,Monaco di Baviera,Μόναχο,Мюнхен',
+          '48.13743',
+          '11.57549',
+          'DE',
+          '02',
+          '1260391',
+        ]),
+        cityRow([
+          '3448439',
+          'São Paulo',
+          'Sao Paulo',
+          'Sampa,Pauliceia,Terra da Garoa,São P,SaoP,SP',
+          '-23.5475',
+          '-46.63611',
+          'BR',
+          '27',
+          '12400232',
+        ]),
       ].join('\n'),
       'utf8',
     );
@@ -68,6 +88,8 @@ describe('GeoNames city data builder', () => {
         '2\t2867714\tzh\t穆尼黑\t0\t0\t0\t0\t\t',
         '3\t3448439\tzh\t圣保罗\t1\t0\t0\t0\t\t',
         '4\t3448439\tde\tSankt Paul\t1\t0\t0\t0\t\t',
+        '5\t3448439\t\tPauliceia\t0\t0\t1\t0\t\t',
+        '6\t3448439\tfa\t\t0\t0\t0\t0\t\t',
       ].join('\n'),
       'utf8',
     );
@@ -88,12 +110,21 @@ describe('GeoNames city data builder', () => {
 
     expect(first).toEqual(second);
     expect(first.cityCount).toBe(2);
+    expect(first.truncatedAliasCities).toBe(2);
     expect(first.checksum).toMatch(/^[a-f0-9]{64}$/);
     const generated = await readFile(firstOutput, 'utf8');
     expect(generated).toBe(await readFile(secondOutput, 'utf8'));
-    expect(generated).toContain('[2867714,"München","Munich",["Muenchen","慕尼黑","穆尼黑"],"DE","EU"');
+    expect(generated).toContain(
+      '[2867714,"München","Munich",["Muenchen","Monaco di Baviera","Μόναχο","穆尼黑"],"DE","EU"',
+    );
     expect(generated).toContain('GeoNames geographical database');
     expect(generated).toContain('CITY_DATA_SOURCE_DATE = "2026-08-16"');
+    expect(generated).toContain('CITY_DATA_ALIAS_LIMIT = 3');
+    expect(generated).toContain('CITY_DATA_TRUNCATED_ALIAS_CITIES = 2');
+    expect(generated).toContain('"Sampa","Pauliceia","Terra da Garoa"');
+    expect(generated).not.toContain('"São P"');
+    expect(generated).not.toContain('"SaoP"');
+    expect(generated).not.toContain('"SP"');
   });
 
   it('rejects duplicate IDs and malformed source rows', async () => {
