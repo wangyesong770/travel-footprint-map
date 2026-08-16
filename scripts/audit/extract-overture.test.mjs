@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { TextDecoder, TextEncoder } from 'node:util';
@@ -6,6 +7,7 @@ import { URL } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import * as overtureExtractor from './extract-overture.mjs';
 import { extractCountry } from './extract-overture.mjs';
 import { snapshotSourceManifest } from './snapshot-source-manifest.mjs';
 
@@ -21,6 +23,19 @@ async function temporaryDirectory() {
   return directory;
 }
 
+async function localSnapshot(directory, rowCounts) {
+  const snapshotDir = path.join(directory, 'snapshot');
+  await mkdir(path.join(snapshotDir, 'data'), { recursive: true });
+  await writeFile(path.join(snapshotDir, 'metadata.json'), `${JSON.stringify({
+    schemaVersion: 1,
+    release: '2026-06-17.0',
+    sourceSnapshotSha256: 'a'.repeat(64),
+    rowCounts,
+    totalRowCount: Object.values(rowCounts).reduce((sum, count) => sum + count, 0),
+  })}\n`, 'utf8');
+  return snapshotDir;
+}
+
 function response(body, status = 200) {
   const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body;
   return {
@@ -32,8 +47,151 @@ function response(body, status = 200) {
 }
 
 describe('fixed-release Overture extractor', () => {
-  it('uses fixed release URLs, bound source codes, a land join, and stable ID ordering', async () => {
-    const outputDir = await temporaryDirectory();
+  it('provides a one-time release snapshot stage before country extraction', () => {
+    expect(overtureExtractor.createDivisionSnapshot).toBeTypeOf('function');
+  });
+
+  it('exposes separate snapshot and country CLI modes', () => {
+    expect(overtureExtractor.parseCliArguments([
+      'snapshot', '--release', '2026-06-17.0', '--snapshot', 'cache/release', '--source-manifest', 'source.json',
+    ])).toMatchObject({ mode: 'snapshot', release: '2026-06-17.0' });
+    expect(overtureExtractor.parseCliArguments([
+      'country', '--release', '2026-06-17.0', '--country', 'CN', '--snapshot', 'cache/release', '--output', 'out', '--source-codes', 'CN,HK,MO,TW',
+    ])).toMatchObject({
+      mode: 'country', release: '2026-06-17.0', country: 'CN', sourceCountryCodes: ['CN', 'HK', 'MO', 'TW'],
+    });
+  });
+
+  it('snapshots a fixed release once with bounded memory, spill storage, and source-bound metadata', async () => {
+    const directory = await temporaryDirectory();
+    const snapshotDir = path.join(directory, 'snapshot');
+    const sourceManifestPath = path.join(directory, 'source.json');
+    const sourceBytes = `${JSON.stringify({
+      schemaVersion: 1,
+      release: '2026-06-17.0',
+      objects: [{ key: 'theme=divisions/type=division/part.parquet', byteSize: 3, etag: 'x', sha256: 'a'.repeat(64) }],
+    }, null, 2)}\n`;
+    await writeFile(sourceManifestPath, sourceBytes, 'utf8');
+    const calls = [];
+    const runner = async (command, args, options) => {
+      calls.push({ command, args, options });
+      if (args[0] === '-version') return { exitCode: 0, stdout: 'DuckDB v1.5.5\n', stderr: '' };
+      await mkdir(path.join(options.expectedDataDirectory, 'sourceCountryCode=MO'), { recursive: true });
+      await writeFile(path.join(options.expectedDataDirectory, 'sourceCountryCode=MO', 'data.parquet'), 'parquet', 'utf8');
+      await writeFile(options.expectedRowCountsPath, '[{"sourceCountryCode":"MO","rowCount":2}]\n', 'utf8');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+
+    const result = await overtureExtractor.createDivisionSnapshot({
+      release: '2026-06-17.0', snapshotDir, sourceManifestPath, runner,
+    });
+
+    expect(calls).toHaveLength(2);
+    const sql = calls[1].options.input;
+    expect(sql).toContain("SET memory_limit = '2GB'");
+    expect(sql).toMatch(/SET threads = \d+/);
+    expect(sql).toContain('SET temp_directory =');
+    expect(sql).toContain('s3://overturemaps-us-west-2/release/2026-06-17.0/theme=divisions/type=division/*');
+    expect(sql).toContain('PARTITION_BY (sourceCountryCode)');
+    const metadata = JSON.parse(await readFile(path.join(snapshotDir, 'metadata.json'), 'utf8'));
+    expect(metadata).toMatchObject({
+      schemaVersion: 1,
+      schema: { version: 1, format: 'partitioned-parquet', partitionKey: 'sourceCountryCode' },
+      release: '2026-06-17.0',
+      duckdbVersion: 'DuckDB v1.5.5',
+      sourceSnapshotSha256: createHash('sha256').update(sourceBytes).digest('hex'),
+      totalRowCount: 2,
+      rowCounts: { MO: 2 },
+    });
+    expect(result.metadata).toEqual(metadata);
+    expect((await readdir(directory)).some((name) => name.includes('.partial'))).toBe(false);
+  });
+
+  it('reuses one local snapshot for multiple countries and country SQL contains no remote URL', async () => {
+    const directory = await temporaryDirectory();
+    const snapshotDir = path.join(directory, 'snapshot');
+    const sourceManifestPath = path.join(directory, 'source.json');
+    await writeFile(sourceManifestPath, `${JSON.stringify({ schemaVersion: 1, release: '2026-06-17.0', objects: [{}] })}\n`, 'utf8');
+    const sqlCalls = [];
+    let remoteSnapshotCalls = 0;
+    const runner = async (_command, args, options) => {
+      if (args[0] === '-version') return { exitCode: 0, stdout: 'DuckDB v1.5.5', stderr: '' };
+      if (options.expectedDataDirectory) {
+        remoteSnapshotCalls += 1;
+        await mkdir(path.join(options.expectedDataDirectory, 'sourceCountryCode=MO'), { recursive: true });
+        await writeFile(path.join(options.expectedDataDirectory, 'sourceCountryCode=MO', 'data.parquet'), 'fixture', 'utf8');
+        await writeFile(options.expectedRowCountsPath, '[{"sourceCountryCode":"MO","rowCount":1},{"sourceCountryCode":"US","rowCount":1}]\n', 'utf8');
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      sqlCalls.push(options.input);
+      await writeFile(options.expectedOutputPath, '{"type":"Feature"}\n', 'utf8');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+
+    await overtureExtractor.createDivisionSnapshot({ release: '2026-06-17.0', snapshotDir, sourceManifestPath, runner });
+    await extractCountry({ release: '2026-06-17.0', country: 'MO', snapshotDir, outputDir: path.join(directory, 'mo'), runner });
+    await extractCountry({ release: '2026-06-17.0', country: 'US', snapshotDir, outputDir: path.join(directory, 'us'), runner });
+
+    expect(remoteSnapshotCalls).toBe(1);
+    expect(sqlCalls).toHaveLength(2);
+    expect(sqlCalls.every((sql) => !/s3:|https?:/i.test(sql))).toBe(true);
+    expect(sqlCalls.every((sql) => !/\bINSTALL\b/i.test(sql))).toBe(true);
+    expect(sqlCalls.every((sql) => sql.includes(path.join(snapshotDir, 'data')))).toBe(true);
+  });
+
+  it('leaves no snapshot or partial directory when remote snapshot creation fails', async () => {
+    const directory = await temporaryDirectory();
+    const snapshotDir = path.join(directory, 'snapshot');
+    const sourceManifestPath = path.join(directory, 'source.json');
+    await writeFile(sourceManifestPath, `${JSON.stringify({ schemaVersion: 1, release: '2026-06-17.0', objects: [{}] })}\n`, 'utf8');
+    const runner = async (_command, args, options) => {
+      if (args[0] === '-version') return { exitCode: 0, stdout: 'DuckDB v1.5.5', stderr: '' };
+      await mkdir(options.expectedDataDirectory, { recursive: true });
+      await writeFile(path.join(options.expectedDataDirectory, 'partial.parquet'), 'partial', 'utf8');
+      return { exitCode: 9, stdout: '', stderr: 'remote join failed' };
+    };
+
+    await expect(overtureExtractor.createDivisionSnapshot({
+      release: '2026-06-17.0', snapshotDir, sourceManifestPath, runner,
+    })).rejects.toThrow(/snapshot failed.*remote join failed/);
+    expect((await readdir(directory)).sort()).toEqual(['source.json']);
+  });
+
+  it('executes SQL supplied on stdin through the real process runner', async () => {
+    const directory = await temporaryDirectory();
+    const outputDir = path.join(directory, 'output');
+    const snapshotDir = await localSnapshot(directory, { MO: 1 });
+    const fakeDuckDb = path.join(directory, 'duckdb');
+    await writeFile(fakeDuckDb, `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from 'node:fs';
+if (process.argv.includes('-version')) {
+  process.stdout.write('DuckDB fake integration v1\\n');
+  process.exit(0);
+}
+if (process.argv.includes('-no-stdin')) process.exit(0);
+const sql = readFileSync(0, 'utf8');
+const match = sql.match(/\\) TO '([^']+)' WITH/);
+if (!match) process.exit(2);
+writeFileSync(match[1], '{"type":"Feature"}\\n');
+`, 'utf8');
+    await chmod(fakeDuckDb, 0o755);
+
+    const result = await extractCountry({
+      release: '2026-06-17.0',
+      country: 'MO',
+      snapshotDir,
+      outputDir,
+      duckdbPath: fakeDuckDb,
+    });
+
+    expect(await readFile(result.outputPath, 'utf8')).toBe('{"type":"Feature"}\n');
+    expect((await readdir(outputDir)).some((name) => name.endsWith('.partial'))).toBe(false);
+  });
+
+  it('uses bound source codes, the local snapshot, and stable ID ordering', async () => {
+    const directory = await temporaryDirectory();
+    const outputDir = path.join(directory, 'output');
+    const snapshotDir = await localSnapshot(directory, { CN: 1, HK: 1, MO: 1, TW: 1 });
     const calls = [];
     const runner = async (command, args, options) => {
       calls.push({ command, args, options });
@@ -46,6 +204,7 @@ describe('fixed-release Overture extractor', () => {
       release: '2026-06-17.0',
       country: 'CN',
       sourceCountryCodes: ['CN', 'HK', 'MO', 'TW'],
+      snapshotDir,
       outputDir,
       runner,
     });
@@ -55,14 +214,10 @@ describe('fixed-release Overture extractor', () => {
     expect(calls[1].command).toBe('duckdb');
     expect(calls[1].options.shell).toBe(false);
     const sql = calls[1].options.input;
-    expect(sql).toContain('s3://overturemaps-us-west-2/release/2026-06-17.0/theme=divisions/type=division/*');
-    expect(sql).toContain('s3://overturemaps-us-west-2/release/2026-06-17.0/theme=divisions/type=division_area/*');
+    expect(sql).not.toMatch(/s3:|https?:/i);
+    expect(sql).toContain(path.join(snapshotDir, 'data'));
     expect(sql).toContain("SET VARIABLE source_country_codes = ['CN', 'HK', 'MO', 'TW']");
-    expect(sql).toMatch(/division\.id\s*=\s*division_area\.division_id/);
-    expect(sql).toMatch(/division_area\.is_land\s*=\s*true/);
-    expect(sql).toContain('division.admin_level AS adminLevel');
-    expect(sql).toContain('division.local_type AS localType');
-    expect(sql).toMatch(/ORDER BY\s+division\.id/i);
+    expect(sql).toMatch(/ORDER BY\s+divisionId/i);
     expect(await readFile(result.outputPath, 'utf8')).toBe('{"type":"Feature"}\n');
     expect(result.duckdbVersion).toBe('DuckDB v1.4.0');
     expect((await readdir(outputDir)).some((name) => name.endsWith('.partial'))).toBe(false);
@@ -84,7 +239,9 @@ describe('fixed-release Overture extractor', () => {
   });
 
   it('does not consume output after a nonzero DuckDB exit and deletes partial files', async () => {
-    const outputDir = await temporaryDirectory();
+    const directory = await temporaryDirectory();
+    const outputDir = path.join(directory, 'output');
+    const snapshotDir = await localSnapshot(directory, { US: 1 });
     let call = 0;
     const runner = async (_command, args, options) => {
       call += 1;
@@ -93,15 +250,17 @@ describe('fixed-release Overture extractor', () => {
       return { exitCode: 9, stdout: '', stderr: 'remote parquet unavailable' };
     };
 
-    await expect(extractCountry({ release: '2026-06-17.0', country: 'US', outputDir, runner }))
+    await expect(extractCountry({ release: '2026-06-17.0', country: 'US', snapshotDir, outputDir, runner }))
       .rejects.toThrow(/DuckDB extraction failed.*remote parquet unavailable/);
     expect(call).toBe(2);
     expect(await readdir(outputDir)).toEqual([]);
   });
 
   it('rejects missing DuckDB with an actionable preflight error', async () => {
+    const directory = await temporaryDirectory();
+    const snapshotDir = await localSnapshot(directory, { US: 1 });
     const runner = async () => { throw Object.assign(new Error('spawn duckdb ENOENT'), { code: 'ENOENT' }); };
-    await expect(extractCountry({ release: '2026-06-17.0', country: 'US', outputDir: await temporaryDirectory(), runner }))
+    await expect(extractCountry({ release: '2026-06-17.0', country: 'US', snapshotDir, outputDir: path.join(directory, 'output'), runner }))
       .rejects.toThrow(/DuckDB CLI is required/);
   });
 });

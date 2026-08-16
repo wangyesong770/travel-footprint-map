@@ -1,14 +1,19 @@
-import { mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { runProcess } from './lib/process-runner.mjs';
 
 const RELEASE_PATTERN = /^(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\.\d+$/;
 const COUNTRY_PATTERN = /^[A-Z]{2}$/;
 const SQL_PATH = path.resolve(process.cwd(), 'scripts/audit/sql/extract-country.sql');
+const SNAPSHOT_SQL_PATH = path.resolve(process.cwd(), 'scripts/audit/sql/snapshot-divisions.sql');
+
+function escapedSqlPath(value) {
+  return value.replaceAll("'", "''");
+}
 
 export function validateRelease(release) {
   const match = typeof release === 'string' ? release.match(RELEASE_PATTERN) : undefined;
@@ -31,43 +36,137 @@ function sqlString(value) {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
-async function renderSql({ release, sourceCountryCodes, outputPath }) {
+async function renderCountrySql({ sourceCountryCodes, snapshotDir, outputPath }) {
   const template = await readFile(SQL_PATH, 'utf8');
-  const baseUrl = `s3://overturemaps-us-west-2/release/${release}/theme=divisions`;
   return template
     .replace('__SOURCE_COUNTRY_CODES__', `[${sourceCountryCodes.map(sqlString).join(', ')}]`)
-    .replace('__DIVISION_URL__', `${baseUrl}/type=division/*`)
-    .replace('__DIVISION_AREA_URL__', `${baseUrl}/type=division_area/*`)
-    .replace('__OUTPUT_PATH__', outputPath.replaceAll("'", "''"));
+    .replace('__SNAPSHOT_DATA_GLOB__', escapedSqlPath(path.join(snapshotDir, 'data', '**', '*.parquet')))
+    .replace('__OUTPUT_PATH__', escapedSqlPath(outputPath));
 }
 
-export async function extractCountry({ release, country, sourceCountryCodes = [country], outputDir, runner = runProcess, duckdbPath = 'duckdb' }) {
+async function duckDbVersion(runner, duckdbPath) {
+  let result;
+  try {
+    result = await runner(duckdbPath, ['-version'], { shell: false, maxOutputBytes: 16 * 1024 });
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw new Error('DuckDB CLI is required; install duckdb and ensure it is on PATH', { cause: error });
+    throw error;
+  }
+  if (result.exitCode !== 0 || typeof result.stdout !== 'string' || result.stdout.trim() === '') {
+    throw new Error(`DuckDB preflight failed${result.stderr ? `: ${result.stderr.trim()}` : ''}`);
+  }
+  return result.stdout.trim();
+}
+
+function validateFilesystemPath(value, label) {
+  if (typeof value !== 'string' || value.length === 0 || value.includes('\0')) throw new Error(`invalid ${label}`);
+  return value;
+}
+
+export async function createDivisionSnapshot({ release, snapshotDir, sourceManifestPath, runner = runProcess, duckdbPath = 'duckdb' }) {
+  validateRelease(release);
+  validateFilesystemPath(snapshotDir, 'snapshot directory');
+  validateFilesystemPath(sourceManifestPath, 'source manifest path');
+  if (typeof runner !== 'function') throw new TypeError('runner must be a function');
+
+  const sourceBytes = await readFile(sourceManifestPath);
+  let sourceManifest;
+  try {
+    sourceManifest = JSON.parse(sourceBytes.toString('utf8'));
+  } catch (error) {
+    throw new Error('source manifest is not valid JSON', { cause: error });
+  }
+  if (sourceManifest?.release !== release || !Array.isArray(sourceManifest.objects) || sourceManifest.objects.length === 0) {
+    throw new Error('source manifest does not match the fixed release');
+  }
+  const sourceSnapshotSha256 = createHash('sha256').update(sourceBytes).digest('hex');
+  const duckdbVersion = await duckDbVersion(runner, duckdbPath);
+  const stagingDir = `${snapshotDir}.${randomUUID()}.partial`;
+  const dataDir = path.join(stagingDir, 'data');
+  const rowCountsPath = path.join(stagingDir, 'row-counts.json');
+  const tempDir = path.join(stagingDir, 'spill');
+  try {
+    await mkdir(dataDir, { recursive: true });
+    await mkdir(tempDir, { recursive: true });
+    const template = await readFile(SNAPSHOT_SQL_PATH, 'utf8');
+    const baseUrl = `s3://overturemaps-us-west-2/release/${release}/theme=divisions`;
+    const sql = template
+      .replace('__TEMP_DIRECTORY__', escapedSqlPath(tempDir))
+      .replace('__DIVISION_URL__', `${baseUrl}/type=division/*`)
+      .replace('__DIVISION_AREA_URL__', `${baseUrl}/type=division_area/*`)
+      .replace('__SNAPSHOT_DATA_DIRECTORY__', escapedSqlPath(dataDir))
+      .replace('__ROW_COUNTS_PATH__', escapedSqlPath(rowCountsPath));
+    const result = await runner(duckdbPath, [':memory:'], {
+      shell: false,
+      input: sql,
+      maxOutputBytes: 64 * 1024,
+      expectedDataDirectory: dataDir,
+      expectedRowCountsPath: rowCountsPath,
+    });
+    if (result.exitCode !== 0) {
+      const detail = typeof result.stderr === 'string' ? result.stderr.trim() : '';
+      throw new Error(`DuckDB snapshot failed${detail ? `: ${detail}` : ''}`);
+    }
+    const dataEntries = await readdir(dataDir);
+    if (dataEntries.length === 0) throw new Error('DuckDB snapshot produced no partition data');
+    const rawCounts = JSON.parse(await readFile(rowCountsPath, 'utf8'));
+    if (!Array.isArray(rawCounts) || rawCounts.length === 0) throw new Error('DuckDB snapshot produced no row counts');
+    const rowCounts = {};
+    let totalRowCount = 0;
+    for (const entry of rawCounts) {
+      validateCountry(entry?.sourceCountryCode, 'snapshot country code');
+      const rowCount = Number(entry?.rowCount);
+      if (!Number.isSafeInteger(rowCount) || rowCount < 1 || rowCounts[entry.sourceCountryCode] !== undefined) {
+        throw new Error('DuckDB snapshot produced invalid row counts');
+      }
+      rowCounts[entry.sourceCountryCode] = rowCount;
+      totalRowCount += rowCount;
+      if (!Number.isSafeInteger(totalRowCount)) throw new Error('DuckDB snapshot row count overflow');
+    }
+    const metadata = {
+      schemaVersion: 1,
+      schema: { version: 1, format: 'partitioned-parquet', partitionKey: 'sourceCountryCode' },
+      release,
+      duckdbVersion,
+      sourceSnapshotSha256,
+      totalRowCount,
+      rowCounts,
+    };
+    await rm(tempDir, { recursive: true, force: true });
+    await writeFile(path.join(stagingDir, 'metadata.json'), `${JSON.stringify(metadata, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+    await rename(stagingDir, snapshotDir);
+    return { snapshotDir, metadata };
+  } catch (error) {
+    await rm(stagingDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+export async function extractCountry({ release, country, sourceCountryCodes = [country], snapshotDir, outputDir, runner = runProcess, duckdbPath = 'duckdb' }) {
   validateRelease(release);
   validateCountry(country);
   if (!Array.isArray(sourceCountryCodes) || sourceCountryCodes.length === 0 || sourceCountryCodes.length > 32) {
     throw new Error('source country codes must be a non-empty bounded array');
   }
   const uniqueSourceCodes = [...new Set(sourceCountryCodes.map((code) => validateCountry(code, 'source country code')))];
-  if (typeof outputDir !== 'string' || outputDir.length === 0 || outputDir.includes('\0')) throw new Error('invalid output directory');
+  validateFilesystemPath(snapshotDir, 'snapshot directory');
+  validateFilesystemPath(outputDir, 'output directory');
   if (typeof runner !== 'function') throw new TypeError('runner must be a function');
-
-  let versionResult;
-  try {
-    versionResult = await runner(duckdbPath, ['-version'], { shell: false, maxOutputBytes: 16 * 1024 });
-  } catch (error) {
-    if (error?.code === 'ENOENT') throw new Error('DuckDB CLI is required; install duckdb and ensure it is on PATH', { cause: error });
-    throw error;
+  const snapshotMetadata = JSON.parse(await readFile(path.join(snapshotDir, 'metadata.json'), 'utf8'));
+  if (snapshotMetadata?.schemaVersion !== 1 || snapshotMetadata.release !== release) throw new Error('local division snapshot does not match release');
+  for (const code of uniqueSourceCodes) {
+    if (!Number.isSafeInteger(snapshotMetadata.rowCounts?.[code]) || snapshotMetadata.rowCounts[code] < 1) {
+      throw new Error(`local division snapshot has no rows for ${code}`);
+    }
   }
-  if (versionResult.exitCode !== 0 || typeof versionResult.stdout !== 'string' || versionResult.stdout.trim() === '') {
-    throw new Error(`DuckDB preflight failed${versionResult.stderr ? `: ${versionResult.stderr.trim()}` : ''}`);
-  }
+  const version = await duckDbVersion(runner, duckdbPath);
 
   await mkdir(outputDir, { recursive: true });
   const finalPath = path.join(outputDir, 'areas.geojsonseq');
   const temporaryPath = path.join(outputDir, `.areas.${randomUUID()}.partial`);
   try {
-    const sql = await renderSql({ release, sourceCountryCodes: uniqueSourceCodes, outputPath: temporaryPath });
-    const result = await runner(duckdbPath, [':memory:', '-no-stdin'], {
+    const sql = await renderCountrySql({ sourceCountryCodes: uniqueSourceCodes, snapshotDir, outputPath: temporaryPath });
+    const result = await runner(duckdbPath, [':memory:'], {
       shell: false,
       input: sql,
       maxOutputBytes: 64 * 1024,
@@ -86,7 +185,7 @@ export async function extractCountry({ release, country, sourceCountryCodes = [c
       sourceCountryCodes: uniqueSourceCodes,
       outputPath: finalPath,
       byteSize: outputStat.size,
-      duckdbVersion: versionResult.stdout.trim(),
+      duckdbVersion: version,
     };
   } catch (error) {
     await rm(temporaryPath, { force: true });
@@ -94,26 +193,47 @@ export async function extractCountry({ release, country, sourceCountryCodes = [c
   }
 }
 
-function parseCliArguments(argv) {
+export function parseCliArguments(argv) {
+  const mode = argv[0];
+  if (!['snapshot', 'country'].includes(mode)) {
+    throw new Error('usage: extract-overture.mjs snapshot|country [options]');
+  }
+  const allowed = mode === 'snapshot'
+    ? new Set(['--release', '--snapshot', '--source-manifest'])
+    : new Set(['--release', '--country', '--snapshot', '--output', '--source-codes']);
   const values = new Map();
-  for (let index = 0; index < argv.length; index += 2) {
-    if (!['--release', '--country', '--output', '--source-codes'].includes(argv[index]) || argv[index + 1] === undefined) {
-      throw new Error('usage: node scripts/audit/extract-overture.mjs --release <release> --country <ISO2> --output <dir> [--source-codes CN,HK]');
+  for (let index = 1; index < argv.length; index += 2) {
+    if (!allowed.has(argv[index]) || argv[index + 1] === undefined) {
+      throw new Error('invalid extractor arguments');
     }
     if (values.has(argv[index])) throw new Error(`duplicate argument: ${argv[index]}`);
     values.set(argv[index], argv[index + 1]);
   }
-  if (!values.has('--release') || !values.has('--country') || !values.has('--output')) throw new Error('release, country, and output are required');
+  if (!values.has('--release') || !values.has('--snapshot')) throw new Error('release and snapshot are required');
+  if (mode === 'snapshot') {
+    if (!values.has('--source-manifest')) throw new Error('source manifest is required');
+    return {
+      mode,
+      release: values.get('--release'),
+      snapshotDir: path.resolve(values.get('--snapshot')),
+      sourceManifestPath: path.resolve(values.get('--source-manifest')),
+    };
+  }
+  if (!values.has('--country') || !values.has('--output')) throw new Error('country and output are required');
   return {
+    mode,
     release: values.get('--release'),
     country: values.get('--country'),
+    snapshotDir: path.resolve(values.get('--snapshot')),
     outputDir: path.resolve(values.get('--output')),
     ...(values.has('--source-codes') ? { sourceCountryCodes: values.get('--source-codes').split(',') } : {}),
   };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  extractCountry(parseCliArguments(process.argv.slice(2))).then((result) => {
+  const options = parseCliArguments(process.argv.slice(2));
+  const operation = options.mode === 'snapshot' ? createDivisionSnapshot : extractCountry;
+  operation(options).then((result) => {
     process.stdout.write(`${JSON.stringify(result)}\n`);
   }).catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : 'Overture extraction failed'}\n`);
