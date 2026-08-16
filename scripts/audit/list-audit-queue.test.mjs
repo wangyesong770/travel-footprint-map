@@ -279,6 +279,9 @@ describe('checked-in sovereign baseline', () => {
     expect(owner.get('PR')).toBe('US');
     expect(owner.get('NC')).toBe('FR');
     expect(owner.get('GL')).toBe('DK');
+    expect(owner.get('XE')).toBe('NL');
+    expect(owner.get('XS')).toBe('NL');
+    expect(owner.get('XJ')).toBe('NO');
     expect(owner.get('CK')).toBe('CK');
     expect(owner.get('NU')).toBe('NU');
     expect(registry.countries.some((entry) => ['HK', 'MO', 'TW'].includes(entry.sovereignCode))).toBe(false);

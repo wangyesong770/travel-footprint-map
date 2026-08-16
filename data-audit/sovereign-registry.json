@@ -5237,7 +5237,9 @@
         "AW",
         "BQ",
         "CW",
-        "SX"
+        "SX",
+        "XE",
+        "XS"
       ],
       "productLevel": "pending-country-audit",
       "selectorVersion": 1,
@@ -5261,6 +5263,18 @@
           "url": "https://www.mfa.gov.cn/web/gjhdq_676201/gj_676203/oz_678770/",
           "retrievedOn": "2026-08-16",
           "license": "中华人民共和国外交部公开信息；仅用于审核目录与中文名称"
+        },
+        {
+          "title": "Government of the Netherlands: What are the different parts of the Kingdom of the Netherlands?",
+          "url": "https://www.government.nl/faq/what-are-the-different-parts-of-the-kingdom-of-the-netherlands",
+          "retrievedOn": "2026-08-16",
+          "license": "Government.nl 正文按 CC0 1.0 提供；仅用于审核 Sint Eustatius 与 Saba 属于荷兰公共实体"
+        },
+        {
+          "title": "Government of the Netherlands: Governance of Bonaire, St Eustatius and Saba",
+          "url": "https://www.government.nl/themes/government-and-democracy/caribbean-parts-of-the-kingdom/governance-of-bonaire-st-eustatius-and-saba",
+          "retrievedOn": "2026-08-16",
+          "license": "Government.nl 正文按 CC0 1.0 提供；仅用于审核两个特殊来源代码的主权 owner"
         }
       ],
       "perspective": "overture-default",
@@ -5281,7 +5295,8 @@
       "sourceCountryCodes": [
         "NO",
         "BV",
-        "SJ"
+        "SJ",
+        "XJ"
       ],
       "productLevel": "pending-country-audit",
       "selectorVersion": 1,
@@ -5305,6 +5320,12 @@
           "url": "https://www.mfa.gov.cn/web/gjhdq_676201/gj_676203/oz_678770/",
           "retrievedOn": "2026-08-16",
           "license": "中华人民共和国外交部公开信息；仅用于审核目录与中文名称"
+        },
+        {
+          "title": "Norwegian Ministry of Foreign Affairs: The High North, section 5.1.3 Svalbard and Jan Mayen",
+          "url": "https://www.regjeringen.no/en/documents/meld.-st.-7-20112012/id663433/?ch=2",
+          "retrievedOn": "2026-08-16",
+          "license": "挪威外交部公开白皮书；仅作审核引用，证明 Jan Mayen 属于挪威王国且主权无争议"
         }
       ],
       "perspective": "overture-default",
