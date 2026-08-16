@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "release": "2026-06-17.0",
+  "sovereignCode": "ZZ",
+  "status": "draft",
+  "exceptions": [
+    {
+      "divisionId": "replace-with-special-case-division-id",
+      "action": "allow",
+      "institutionalCategory": "replace-with-official-category",
+      "reason": "replace-with-reviewed-inclusion-or-exclusion-reason",
+      "referenceIds": ["official-register"]
+    }
+  ]
+}

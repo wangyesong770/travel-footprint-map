@@ -16,6 +16,10 @@ const reference = {
 const country = {
   sovereignCode: 'AA',
   sourceCountryCodes: ['AA'],
+  nameZh: '甲国',
+  nameLocal: 'Aland',
+  auditRegion: 'east-asia-pacific',
+  worldGeometryIds: ['AA'],
   productLevel: 'municipality',
   selectorVersion: 1,
   overtureSelector: {
@@ -35,6 +39,13 @@ const country = {
 const validInput = () => ({
   release: '2026-06-17.0',
   schemaVersion: 'v1.17.0',
+  nonSovereignExclusions: [{
+    key: 'antarctica',
+    sourceCountryCodes: ['AQ'],
+    worldGeometryIds: ['AQ'],
+    reason: 'Antarctica is not a sovereign country entry.',
+    officialReferences: [structuredClone(reference)],
+  }],
   countries: [structuredClone(country)],
 });
 
@@ -80,6 +91,67 @@ describe('loadAuditRegistry', () => {
     input['releasee'] = '2026-06-17.0';
 
     expect(() => loadAuditRegistry(input)).toThrowError(/UNKNOWN_KEY/);
+  });
+
+  it('only permits the evidence-backed Antarctica non-sovereign exclusion', () => {
+    const wrongCode = validInput();
+    wrongCode.nonSovereignExclusions[0]!.sourceCountryCodes = ['EH'];
+    expect(() => loadAuditRegistry(wrongCode)).toThrowError(/INVALID_CONFIG/);
+
+    const missingEvidence = validInput();
+    missingEvidence.nonSovereignExclusions[0]!.officialReferences = [];
+    expect(() => loadAuditRegistry(missingEvidence)).toThrowError(/INVALID_CONFIG/);
+
+    const unknownKey = validInput() as unknown as { nonSovereignExclusions: Record<string, unknown>[] };
+    unknownKey.nonSovereignExclusions[0]!.disputed = true;
+    expect(() => loadAuditRegistry(unknownKey)).toThrowError(/UNKNOWN_KEY/);
+  });
+
+  it('permits only the exact reviewed non-country world features and never EH or GS', () => {
+    const input = validInput();
+    input.nonSovereignExclusions.push({
+      key: 'bir-tawil' as 'antarctica',
+      sourceCountryCodes: [] as unknown as string[],
+      worldGeometryIds: ['BRT'],
+      reason: 'Natural Earth classifies this feature as indeterminate.',
+      officialReferences: [structuredClone(reference)],
+    });
+    input.nonSovereignExclusions.push({
+      key: 'brazilian-island' as 'antarctica',
+      sourceCountryCodes: [] as unknown as string[],
+      worldGeometryIds: ['BRI'],
+      reason: 'Natural Earth classifies this feature as indeterminate.',
+      officialReferences: [structuredClone(reference)],
+    });
+    expect(() => loadAuditRegistry(input)).not.toThrow();
+
+    for (const disputedId of ['EH', 'GS']) {
+      const invalid = structuredClone(input);
+      invalid.nonSovereignExclusions[1]!.worldGeometryIds = [disputedId];
+      expect(() => loadAuditRegistry(invalid)).toThrowError(/INVALID_CONFIG/);
+    }
+  });
+
+  it('requires sovereign display metadata and one exact audit region', () => {
+    for (const key of ['nameZh', 'nameLocal', 'auditRegion', 'worldGeometryIds'] as const) {
+      const input = validInput();
+      delete (input.countries[0] as Partial<typeof country>)[key];
+      expect(() => loadAuditRegistry(input)).toThrowError(/INVALID_CONFIG/);
+    }
+
+    const invalidRegion = validInput();
+    invalidRegion.countries[0]!.auditRegion = 'asia' as 'east-asia-pacific';
+    expect(() => loadAuditRegistry(invalidRegion)).toThrowError(/INVALID_CONFIG/);
+  });
+
+  it('rejects duplicate or unsafe world geometry ids', () => {
+    const duplicate = validInput();
+    duplicate.countries[0]!.worldGeometryIds = ['AA', 'AA'];
+    expect(() => loadAuditRegistry(duplicate)).toThrowError(/INVALID_CONFIG/);
+
+    const unsafe = validInput();
+    unsafe.countries[0]!.worldGeometryIds = ['../../AA'];
+    expect(() => loadAuditRegistry(unsafe)).toThrowError(/INVALID_CONFIG/);
   });
 
   it('rejects invalid political perspectives', () => {
@@ -154,8 +226,12 @@ describe('loadAuditRegistry', () => {
 
     expect(Object.isFrozen(registry)).toBe(true);
     expect(Object.isFrozen(registry.worldEntries)).toBe(true);
+    expect(Object.isFrozen(registry.nonSovereignExclusions)).toBe(true);
+    expect(Object.isFrozen(registry.nonSovereignExclusions[0])).toBe(true);
+    expect(Object.isFrozen(registry.nonSovereignExclusions[0]?.officialReferences[0])).toBe(true);
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(config.sourceCountryCodes)).toBe(true);
+    expect(Object.isFrozen(config.worldGeometryIds)).toBe(true);
     expect(Object.isFrozen(config.overtureSelector)).toBe(true);
     expect(Object.isFrozen(config.overtureSelector.localTypeRules)).toBe(true);
     expect(Object.isFrozen(config.officialReferences[0])).toBe(true);

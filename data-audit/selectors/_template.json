@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "release": "2026-06-17.0",
+  "sovereignCode": "ZZ",
+  "status": "draft",
+  "productLevel": "replace-with-reviewed-product-level",
+  "overtureSelector": {
+    "subtypes": ["replace-with-reviewed-subtype"],
+    "adminLevels": [],
+    "localTypeRules": []
+  },
+  "expectedCount": {
+    "kind": "exact",
+    "value": 0,
+    "referenceIds": ["official-register"]
+  },
+  "officialReferences": [
+    {
+      "id": "official-register",
+      "publisher": "replace-with-official-publisher",
+      "title": "replace-with-reference-title",
+      "url": "https://example.gov/direct/reference",
+      "capturedOn": "2026-08-16",
+      "effectiveOn": "2026-06-17",
+      "license": "replace-with-license-or-use-note",
+      "machineReadable": false
+    }
+  ],
+  "allowlist": ["replace-with-special-case-division-id"],
+  "denylist": [],
+  "sampleApplicability": {
+    "border": { "applicable": false, "reason": "replace-with-reviewed-reason" },
+    "coastal": { "applicable": false, "reason": "replace-with-reviewed-reason" },
+    "specialCaseCategories": []
+  },
+  "samples": [
+    {
+      "category": "capital",
+      "institutionalCategory": "replace-with-official-category",
+      "divisionId": "replace-with-capital-division-id",
+      "expectedInclusion": true,
+      "referenceIds": ["official-register"]
+    },
+    {
+      "category": "ordinary",
+      "institutionalCategory": "replace-with-official-category",
+      "divisionId": "replace-with-ordinary-division-id",
+      "expectedInclusion": true,
+      "referenceIds": ["official-register"]
+    },
+    {
+      "category": "small-rural",
+      "institutionalCategory": "replace-with-official-category",
+      "divisionId": "replace-with-small-rural-division-id",
+      "expectedInclusion": true,
+      "referenceIds": ["official-register"]
+    }
+  ]
+}

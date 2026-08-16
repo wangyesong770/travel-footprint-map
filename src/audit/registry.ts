@@ -3,12 +3,14 @@ import registryData from '../../data-audit/sovereign-registry.json';
 import type { CountryCode } from '../areas/types';
 import {
   CountryAuditError,
+  type AuditRegion,
   type AuditReference,
   type AuditRegistry,
   type AuditStatus,
   type CountExpectation,
   type CountryAuditConfig,
   type LocalTypeRule,
+  type NonSovereignExclusion,
   type OvertureSelector,
   type PoliticalPerspective,
 } from './types';
@@ -17,6 +19,21 @@ const MAX_REFERENCES = 16;
 const MAX_EXCEPTION_IDS = 1000;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const ISO_COUNTRY_CODE = /^[A-Z]{2}$/;
+const WORLD_GEOMETRY_ID = /^[A-Z0-9-]{2,4}$/;
+const AUDIT_REGIONS = new Set<AuditRegion>([
+  'east-asia-pacific',
+  'south-central-asia',
+  'europe',
+  'middle-east-north-africa',
+  'sub-saharan-africa',
+  'north-america-caribbean',
+  'latin-america',
+]);
+const NON_SOVEREIGN_POLICIES = Object.freeze({
+  antarctica: Object.freeze({ sourceCountryCodes: Object.freeze(['AQ']), worldGeometryIds: Object.freeze(['AQ']) }),
+  'bir-tawil': Object.freeze({ sourceCountryCodes: Object.freeze([]), worldGeometryIds: Object.freeze(['BRT']) }),
+  'brazilian-island': Object.freeze({ sourceCountryCodes: Object.freeze([]), worldGeometryIds: Object.freeze(['BRI']) }),
+});
 const PROTOTYPE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 class FrozenLookup<K, V> implements ReadonlyMap<K, V> {
@@ -120,6 +137,22 @@ const readCountryCode = (value: unknown): CountryCode => {
   return code as CountryCode;
 };
 
+const readWorldGeometryIds = (value: unknown): readonly string[] => {
+  if (!Array.isArray(value) || value.length > 64) return fail('INVALID_CONFIG');
+  const ids = value.map((item) => readText(item, 4));
+  if (ids.some((id) => !WORLD_GEOMETRY_ID.test(id)) || new Set(ids).size !== ids.length) {
+    return fail('INVALID_CONFIG');
+  }
+  return Object.freeze(ids);
+};
+
+const readAuditRegion = (value: unknown): AuditRegion => {
+  if (typeof value !== 'string' || !AUDIT_REGIONS.has(value as AuditRegion)) {
+    return fail('INVALID_CONFIG');
+  }
+  return value as AuditRegion;
+};
+
 const readUniqueStrings = (
   value: unknown,
   options: {
@@ -207,11 +240,53 @@ const readReference = (value: unknown): AuditReference => {
   });
 };
 
+const readNonSovereignExclusion = (value: unknown): NonSovereignExclusion => {
+  const record = assertRecord(value);
+  assertKnownKeys(record, [
+    'key',
+    'sourceCountryCodes',
+    'worldGeometryIds',
+    'reason',
+    'officialReferences',
+  ]);
+  if (typeof record['key'] !== 'string' || !(record['key'] in NON_SOVEREIGN_POLICIES)) {
+    return fail('INVALID_CONFIG');
+  }
+  const key = record['key'] as keyof typeof NON_SOVEREIGN_POLICIES;
+  const policy = NON_SOVEREIGN_POLICIES[key];
+  const sourceCountryCodes = readUniqueStrings(record['sourceCountryCodes'], {
+    maximum: 4,
+    countryCodes: true,
+  });
+  const worldGeometryIds = readWorldGeometryIds(record['worldGeometryIds']);
+  if (
+    JSON.stringify(sourceCountryCodes) !== JSON.stringify(policy.sourceCountryCodes)
+    || JSON.stringify(worldGeometryIds) !== JSON.stringify(policy.worldGeometryIds)
+  ) {
+    return fail('INVALID_CONFIG');
+  }
+  if (!Array.isArray(record['officialReferences']) || record['officialReferences'].length === 0) {
+    return fail('INVALID_CONFIG');
+  }
+  if (record['officialReferences'].length > MAX_REFERENCES) return fail('TOO_MANY_REFERENCES');
+  return Object.freeze({
+    key,
+    sourceCountryCodes: Object.freeze(sourceCountryCodes as CountryCode[]),
+    worldGeometryIds: Object.freeze(worldGeometryIds),
+    reason: readText(record['reason']),
+    officialReferences: Object.freeze(record['officialReferences'].map(readReference)),
+  });
+};
+
 const readCountry = (value: unknown): CountryAuditConfig => {
   const record = assertRecord(value);
   assertKnownKeys(record, [
     'sovereignCode',
     'sourceCountryCodes',
+    'nameZh',
+    'nameLocal',
+    'auditRegion',
+    'worldGeometryIds',
     'productLevel',
     'selectorVersion',
     'overtureSelector',
@@ -264,6 +339,10 @@ const readCountry = (value: unknown): CountryAuditConfig => {
   return Object.freeze({
     sovereignCode,
     sourceCountryCodes,
+    nameZh: readText(record['nameZh']),
+    nameLocal: readText(record['nameLocal']),
+    auditRegion: readAuditRegion(record['auditRegion']),
+    worldGeometryIds: readWorldGeometryIds(record['worldGeometryIds']),
     productLevel: readText(record['productLevel'], 64),
     selectorVersion: readInteger(record['selectorVersion'], 1, Number.MAX_SAFE_INTEGER),
     overtureSelector: readSelector(record['overtureSelector']),
@@ -279,12 +358,21 @@ const readCountry = (value: unknown): CountryAuditConfig => {
 
 export const loadAuditRegistry = (input: unknown): AuditRegistry => {
   const record = assertRecord(input);
-  assertKnownKeys(record, ['release', 'schemaVersion', 'countries']);
+  assertKnownKeys(record, ['release', 'schemaVersion', 'nonSovereignExclusions', 'countries']);
   if (record['release'] !== releasePolicy.release) return fail('RELEASE_MISMATCH');
   if (record['schemaVersion'] !== releasePolicy.schemaVersion) {
     return fail('SCHEMA_VERSION_MISMATCH');
   }
   if (!Array.isArray(record['countries'])) return fail('INVALID_CONFIG');
+  if (!Array.isArray(record['nonSovereignExclusions'])) return fail('INVALID_CONFIG');
+
+  const nonSovereignExclusions = record['nonSovereignExclusions'].map(readNonSovereignExclusion);
+  if (nonSovereignExclusions.length < 1 || nonSovereignExclusions.length > 3) {
+    return fail('INVALID_CONFIG');
+  }
+  if (new Set(nonSovereignExclusions.map((entry) => entry.key)).size !== nonSovereignExclusions.length) {
+    return fail('INVALID_CONFIG');
+  }
 
   const worldEntries = record['countries'].map(readCountry);
   const sovereignEntries: Array<readonly [string, CountryAuditConfig]> = [];
@@ -306,6 +394,7 @@ export const loadAuditRegistry = (input: unknown): AuditRegistry => {
     release: releasePolicy.release,
     schemaVersion: releasePolicy.schemaVersion,
     worldEntries: Object.freeze(worldEntries),
+    nonSovereignExclusions: Object.freeze(nonSovereignExclusions),
     bySovereignCode: new FrozenLookup(sovereignEntries),
     bySourceCode: new FrozenLookup(sourceEntries),
   });

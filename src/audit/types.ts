@@ -2,6 +2,14 @@ import type { CountryCode } from '../areas/types';
 
 export type AuditStatus = 'draft' | 'failed' | 'verified';
 export type PoliticalPerspective = 'china-official' | 'overture-default';
+export type AuditRegion =
+  | 'east-asia-pacific'
+  | 'south-central-asia'
+  | 'europe'
+  | 'middle-east-north-africa'
+  | 'sub-saharan-africa'
+  | 'north-america-caribbean'
+  | 'latin-america';
 
 export interface LocalTypeRule {
   readonly field: 'local_type';
@@ -30,6 +38,10 @@ export interface AuditReference {
 export interface CountryAuditConfig {
   readonly sovereignCode: CountryCode;
   readonly sourceCountryCodes: readonly CountryCode[];
+  readonly nameZh: string;
+  readonly nameLocal: string;
+  readonly auditRegion: AuditRegion;
+  readonly worldGeometryIds: readonly string[];
   readonly productLevel: string;
   readonly selectorVersion: number;
   readonly overtureSelector: OvertureSelector;
@@ -42,12 +54,21 @@ export interface CountryAuditConfig {
   readonly status: AuditStatus;
 }
 
+export interface NonSovereignExclusion {
+  readonly key: 'antarctica' | 'bir-tawil' | 'brazilian-island';
+  readonly sourceCountryCodes: readonly CountryCode[];
+  readonly worldGeometryIds: readonly string[];
+  readonly reason: string;
+  readonly officialReferences: readonly AuditReference[];
+}
+
 export type SovereignRegistryEntry = CountryAuditConfig;
 
 export interface AuditRegistry {
   readonly release: string;
   readonly schemaVersion: string;
   readonly worldEntries: readonly SovereignRegistryEntry[];
+  readonly nonSovereignExclusions: readonly NonSovereignExclusion[];
   readonly bySovereignCode: ReadonlyMap<string, SovereignRegistryEntry>;
   readonly bySourceCode: ReadonlyMap<string, SovereignRegistryEntry>;
 }

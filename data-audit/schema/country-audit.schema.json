@@ -4,10 +4,16 @@
   "title": "Travel Footprint sovereign audit registry",
   "type": "object",
   "additionalProperties": false,
-  "required": ["release", "schemaVersion", "countries"],
+  "required": ["release", "schemaVersion", "nonSovereignExclusions", "countries"],
   "properties": {
     "release": { "const": "2026-06-17.0" },
     "schemaVersion": { "const": "v1.17.0" },
+    "nonSovereignExclusions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": { "$ref": "#/$defs/nonSovereignExclusion" }
+    },
     "countries": {
       "type": "array",
       "items": { "$ref": "#/$defs/country" }
@@ -15,7 +21,41 @@
   },
   "$defs": {
     "iso2": { "type": "string", "pattern": "^[A-Z]{2}$" },
+    "worldGeometryId": { "type": "string", "pattern": "^[A-Z0-9-]{2,4}$" },
     "plainText": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\u0000-\\u001F\\u007F]+$" },
+    "nonSovereignExclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "sourceCountryCodes", "worldGeometryIds", "reason", "officialReferences"],
+      "properties": {
+        "key": { "enum": ["antarctica", "bir-tawil", "brazilian-island"] },
+        "sourceCountryCodes": { "type": "array", "maxItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/iso2" } },
+        "worldGeometryIds": { "type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/worldGeometryId" } },
+        "reason": { "$ref": "#/$defs/plainText" },
+        "officialReferences": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/reference" }
+        }
+      },
+      "allOf": [
+        { "if": { "properties": { "key": { "const": "antarctica" } } }, "then": { "properties": { "sourceCountryCodes": { "const": ["AQ"] }, "worldGeometryIds": { "const": ["AQ"] } } } },
+        { "if": { "properties": { "key": { "const": "bir-tawil" } } }, "then": { "properties": { "sourceCountryCodes": { "const": [] }, "worldGeometryIds": { "const": ["BRT"] } } } },
+        { "if": { "properties": { "key": { "const": "brazilian-island" } } }, "then": { "properties": { "sourceCountryCodes": { "const": [] }, "worldGeometryIds": { "const": ["BRI"] } } } }
+      ]
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "url", "retrievedOn", "license"],
+      "properties": {
+        "title": { "$ref": "#/$defs/plainText" },
+        "url": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "retrievedOn": { "type": "string", "format": "date" },
+        "license": { "$ref": "#/$defs/plainText" }
+      }
+    },
     "country": {
       "type": "object",
       "additionalProperties": false,
@@ -26,10 +66,14 @@
           "else": { "properties": { "perspective": { "const": "overture-default" } } }
         }
       ],
-      "required": ["sovereignCode", "sourceCountryCodes", "productLevel", "selectorVersion", "overtureSelector", "allowlist", "denylist", "expectedCount", "officialReferences", "perspective", "auditedAt", "status"],
+      "required": ["sovereignCode", "sourceCountryCodes", "nameZh", "nameLocal", "auditRegion", "worldGeometryIds", "productLevel", "selectorVersion", "overtureSelector", "allowlist", "denylist", "expectedCount", "officialReferences", "perspective", "auditedAt", "status"],
       "properties": {
         "sovereignCode": { "$ref": "#/$defs/iso2" },
         "sourceCountryCodes": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/iso2" } },
+        "nameZh": { "$ref": "#/$defs/plainText" },
+        "nameLocal": { "$ref": "#/$defs/plainText" },
+        "auditRegion": { "enum": ["east-asia-pacific", "south-central-asia", "europe", "middle-east-north-africa", "sub-saharan-africa", "north-america-caribbean", "latin-america"] },
+        "worldGeometryIds": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/worldGeometryId" } },
         "productLevel": { "$ref": "#/$defs/plainText" },
         "selectorVersion": { "type": "integer", "minimum": 1 },
         "overtureSelector": {
@@ -69,17 +113,7 @@
           "type": "array",
           "minItems": 1,
           "maxItems": 16,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["title", "url", "retrievedOn", "license"],
-            "properties": {
-              "title": { "$ref": "#/$defs/plainText" },
-              "url": { "type": "string", "format": "uri", "pattern": "^https://" },
-              "retrievedOn": { "type": "string", "format": "date" },
-              "license": { "$ref": "#/$defs/plainText" }
-            }
-          }
+          "items": { "$ref": "#/$defs/reference" }
         },
         "perspective": { "enum": ["china-official", "overture-default"] },
         "auditedAt": { "type": "string", "format": "date" },
