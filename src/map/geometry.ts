@@ -4,6 +4,7 @@ import type {
   PolygonCoordinates,
   Position,
 } from '../domain/types';
+import type { CityArea, CountryBoundaryPackage } from '../areas/types';
 
 export interface GeometryValidationOptions {
   maxVertices?: number;
@@ -196,4 +197,131 @@ export function normalizeAntimeridian(geometry: MultiPolygonGeometry): MultiPoly
 
   const result: MultiPolygonGeometry = { type: 'MultiPolygon', coordinates: normalized };
   return sameGeometry(result, geometry) ? geometry : result;
+}
+
+interface RingLookup {
+  readonly coordinates: LinearRing;
+  readonly minLongitude: number;
+  readonly maxLongitude: number;
+  readonly minLatitude: number;
+  readonly maxLatitude: number;
+}
+
+interface PolygonLookup {
+  readonly rings: readonly RingLookup[];
+  readonly outer: RingLookup;
+}
+
+interface AreaLookup {
+  readonly feature: CityArea;
+  readonly polygons: readonly PolygonLookup[];
+}
+
+const packageLookupCache = new WeakMap<CountryBoundaryPackage, readonly AreaLookup[]>();
+
+function prepareLookupRing(input: readonly (readonly number[])[]): RingLookup {
+  if (input.length < 4) throw new Error('线环至少需要 4 个坐标');
+  const cloned = input.map((position) => readPosition(position));
+  const first = cloned[0]!;
+  const last = cloned[cloned.length - 1]!;
+  if (first[0] !== last[0] || first[1] !== last[1]) throw new Error('线环必须闭合');
+  const coordinates = unwrapRing(cloned);
+  let minLongitude = Number.POSITIVE_INFINITY;
+  let maxLongitude = Number.NEGATIVE_INFINITY;
+  let minLatitude = Number.POSITIVE_INFINITY;
+  let maxLatitude = Number.NEGATIVE_INFINITY;
+  for (const [longitude, latitude] of coordinates) {
+    minLongitude = Math.min(minLongitude, longitude);
+    maxLongitude = Math.max(maxLongitude, longitude);
+    minLatitude = Math.min(minLatitude, latitude);
+    maxLatitude = Math.max(maxLatitude, latitude);
+  }
+  if (maxLongitude - minLongitude > 720) throw new Error('边界跨越反经线次数过多');
+  return { coordinates, minLongitude, maxLongitude, minLatitude, maxLatitude };
+}
+
+function preparePolygon(input: readonly (readonly (readonly number[])[])[]): PolygonLookup {
+  if (input.length === 0) throw new Error('多边形至少需要一个线环');
+  const rings = input.map(prepareLookupRing);
+  return { rings, outer: rings[0]! };
+}
+
+function preparePackage(countryPackage: CountryBoundaryPackage): readonly AreaLookup[] {
+  const cached = packageLookupCache.get(countryPackage);
+  if (cached !== undefined) return cached;
+  const prepared = countryPackage.features.map((feature): AreaLookup => {
+    const polygons = feature.geometry.type === 'Polygon'
+      ? [preparePolygon(feature.geometry.coordinates)]
+      : feature.geometry.coordinates.map(preparePolygon);
+    return { feature, polygons };
+  });
+  packageLookupCache.set(countryPackage, prepared);
+  return prepared;
+}
+
+function longitudeNearRing(longitude: number, ring: RingLookup): number {
+  const center = (ring.minLongitude + ring.maxLongitude) / 2;
+  let adjusted = longitude;
+  while (adjusted - center > 180) adjusted -= 360;
+  while (adjusted - center < -180) adjusted += 360;
+  return adjusted;
+}
+
+type RingContainment = 'outside' | 'inside' | 'boundary';
+
+function pointInRing(point: Position, ring: RingLookup): RingContainment {
+  const longitude = longitudeNearRing(point[0], ring);
+  const latitude = point[1];
+  if (
+    longitude < ring.minLongitude || longitude > ring.maxLongitude
+    || latitude < ring.minLatitude || latitude > ring.maxLatitude
+  ) return 'outside';
+
+  let inside = false;
+  for (let index = 1; index < ring.coordinates.length; index += 1) {
+    const start = ring.coordinates[index - 1]!;
+    const end = ring.coordinates[index]!;
+    const deltaLongitude = end[0] - start[0];
+    const deltaLatitude = end[1] - start[1];
+    const cross = (longitude - start[0]) * deltaLatitude - (latitude - start[1]) * deltaLongitude;
+    const scale = Math.max(1, Math.abs(deltaLongitude), Math.abs(deltaLatitude));
+    if (
+      Math.abs(cross) <= Number.EPSILON * 32 * scale
+      && longitude >= Math.min(start[0], end[0]) && longitude <= Math.max(start[0], end[0])
+      && latitude >= Math.min(start[1], end[1]) && latitude <= Math.max(start[1], end[1])
+    ) return 'boundary';
+
+    const crossesLatitude = (start[1] > latitude) !== (end[1] > latitude);
+    if (crossesLatitude) {
+      const intersection = start[0] + ((latitude - start[1]) * deltaLongitude) / deltaLatitude;
+      if (longitude < intersection) inside = !inside;
+    }
+  }
+  return inside ? 'inside' : 'outside';
+}
+
+function pointInPolygon(point: Position, polygon: PolygonLookup): boolean {
+  const outer = pointInRing(point, polygon.outer);
+  if (outer === 'outside') return false;
+  if (outer === 'boundary') return true;
+  for (let index = 1; index < polygon.rings.length; index += 1) {
+    const hole = pointInRing(point, polygon.rings[index]!);
+    if (hole === 'boundary') return true;
+    if (hole === 'inside') return false;
+  }
+  return true;
+}
+
+/**
+ * Finds every administrative area covering a longitude/latitude point.
+ * Package geometry is indexed once; later visits use polygon bounding boxes
+ * before ray casting. Shared edges intentionally return every touching area.
+ */
+export function findContainingAreas(point: Position, countryPackage: CountryBoundaryPackage): CityArea[] {
+  const checkedPoint = readPosition(point);
+  const matches: CityArea[] = [];
+  for (const area of preparePackage(countryPackage)) {
+    if (area.polygons.some((polygon) => pointInPolygon(checkedPoint, polygon))) matches.push(area.feature);
+  }
+  return matches.sort((left, right) => left.properties.areaId.localeCompare(right.properties.areaId, 'en'));
 }

@@ -1,6 +1,36 @@
 import { describe, expect, it } from 'vitest';
 
-import { normalizeAntimeridian, validateGeometry } from './geometry';
+import type { CountryBoundaryPackage, CityArea } from '../areas/types';
+import type { MultiPolygonGeometry } from '../domain/types';
+import { findContainingAreas, normalizeAntimeridian, validateGeometry } from './geometry';
+
+function area(areaId: `ZZ:test:${string}`, coordinates: number[][][][]): CityArea {
+  return {
+    type: 'Feature',
+    properties: {
+      areaId,
+      countryCode: 'ZZ',
+      sourceId: areaId.split(':').at(-1)!,
+      adminLevel: 'municipality',
+      nameLocal: areaId,
+      aliases: [],
+      centroid: [0, 0],
+    },
+    geometry: { type: 'MultiPolygon', coordinates: coordinates as MultiPolygonGeometry['coordinates'] },
+  };
+}
+
+function countryPackage(features: CityArea[]): CountryBoundaryPackage {
+  return {
+    schemaVersion: 1,
+    countryCode: 'ZZ',
+    boundaryVersion: 'test',
+    administrativeScheme: 'municipality',
+    source: 'test',
+    attribution: 'test',
+    features,
+  };
+}
 
 describe('GeoJSON geometry validation', () => {
   it('normalizes a Polygon to a MultiPolygon without retaining input references', () => {
@@ -86,5 +116,69 @@ describe('antimeridian normalization', () => {
     });
 
     expect(normalizeAntimeridian(geometry)).toEqual(geometry);
+  });
+});
+
+describe('point-to-area lookup', () => {
+  it('finds a point inside a polygon and includes its outer boundary', () => {
+    const square = area('ZZ:test:square', [[[
+      [0, 0], [10, 0], [10, 10], [0, 10], [0, 0],
+    ]]]);
+    const pkg = countryPackage([square]);
+
+    expect(findContainingAreas([5, 5], pkg).map((feature) => feature.properties.areaId)).toEqual(['ZZ:test:square']);
+    expect(findContainingAreas([0, 5], pkg).map((feature) => feature.properties.areaId)).toEqual(['ZZ:test:square']);
+  });
+
+  it('excludes a point in a hole but deterministically includes the hole boundary', () => {
+    const withHole = area('ZZ:test:hole', [[
+      [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]],
+      [[3, 3], [7, 3], [7, 7], [3, 7], [3, 3]],
+    ]]);
+    const pkg = countryPackage([withHole]);
+
+    expect(findContainingAreas([5, 5], pkg)).toEqual([]);
+    expect(findContainingAreas([3, 5], pkg).map((feature) => feature.properties.areaId)).toEqual(['ZZ:test:hole']);
+  });
+
+  it('checks every polygon in a multipolygon', () => {
+    const islands = area('ZZ:test:islands', [
+      [[[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]],
+      [[[10, 10], [12, 10], [12, 12], [10, 12], [10, 10]]],
+    ]);
+
+    expect(findContainingAreas([11, 11], countryPackage([islands])).map((feature) => feature.properties.areaId)).toEqual(['ZZ:test:islands']);
+  });
+
+  it('treats a dateline-crossing polygon as the short antimeridian region', () => {
+    const dateline = area('ZZ:test:dateline', [[[
+      [170, -10], [-170, -10], [-170, 10], [170, 10], [170, -10],
+    ]]]);
+    const pkg = countryPackage([dateline]);
+
+    expect(findContainingAreas([179, 0], pkg).map((feature) => feature.properties.areaId)).toEqual(['ZZ:test:dateline']);
+    expect(findContainingAreas([-179, 0], pkg).map((feature) => feature.properties.areaId)).toEqual(['ZZ:test:dateline']);
+    expect(findContainingAreas([0, 0], pkg)).toEqual([]);
+  });
+
+  it('rejects malformed rings instead of producing a false match', () => {
+    const malformed = area('ZZ:test:broken', [[[
+      [0, 0], [10, 0], [10, 10], [0, 10],
+    ]]]);
+
+    expect(() => findContainingAreas([5, 5], countryPackage([malformed]))).toThrow('线环必须闭合');
+  });
+
+  it('returns every overlapping candidate in deterministic area-id order', () => {
+    const coordinates = [[[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]]];
+    const pkg = countryPackage([
+      area('ZZ:test:zeta', coordinates),
+      area('ZZ:test:alpha', coordinates),
+    ]);
+
+    expect(findContainingAreas([5, 5], pkg).map((feature) => feature.properties.areaId)).toEqual([
+      'ZZ:test:alpha',
+      'ZZ:test:zeta',
+    ]);
   });
 });
