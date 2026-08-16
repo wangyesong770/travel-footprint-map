@@ -1,3 +1,5 @@
+import type { AreaId, CountryCode } from '../areas/types';
+
 export type ContinentCode = 'AF' | 'AN' | 'AS' | 'EU' | 'NA' | 'OC' | 'SA';
 export type DatePrecision = 'year' | 'month' | 'day';
 
@@ -32,6 +34,28 @@ export interface VisitRecord {
   visitedOn?: string;
   datePrecision?: DatePrecision;
   note?: string;
+}
+
+export interface AreaVisitSnapshot {
+  readonly areaId: AreaId;
+  readonly countryCode: CountryCode;
+  readonly sourceId: string;
+  readonly adminLevel: string;
+  readonly nameZh?: string;
+  readonly nameLocal: string;
+  readonly aliases: readonly string[];
+  readonly centroid: Readonly<Position>;
+}
+
+/** V2 visit identity is an administrative area; numeric city IDs are legacy-only. */
+export interface VisitV2 {
+  readonly areaId: AreaId;
+  readonly areaSnapshot: AreaVisitSnapshot;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly visitedOn?: string;
+  readonly datePrecision?: DatePrecision;
+  readonly note?: string;
 }
 
 export interface CachedBoundary {
