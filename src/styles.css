@@ -165,6 +165,36 @@ ul { margin: 0; padding: 0; list-style: none; }
   stroke-width: .65;
 }
 
+[data-map-countries] path[role="button"]:focus-visible,
+[data-area-id]:focus-visible {
+  outline: none;
+  stroke: var(--ink);
+  stroke-width: 2.4;
+}
+
+[data-map-countries] .country-visited {
+  fill: color-mix(in srgb, var(--coral) 28%, #eef0e7);
+  stroke: var(--coral-dark);
+}
+
+.area-unvisited {
+  fill: #f4f0e6;
+  stroke: #819892;
+  stroke-width: .75;
+}
+
+.area-unvisited:hover,
+.area-unvisited:focus-visible {
+  fill: #f6cfc2;
+}
+
+.area-visited {
+  fill: var(--coral);
+  fill-opacity: .82;
+  stroke: var(--coral-dark);
+  stroke-width: 1.05;
+}
+
 [data-map-labels] text {
   font-size: 7px;
   font-weight: 650;

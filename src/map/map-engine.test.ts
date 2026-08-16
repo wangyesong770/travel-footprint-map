@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { CachedBoundary, CitySummary } from '../domain/types';
+import type { CityArea, CountryBoundaryPackage } from '../areas/types';
 import { createMapEngine } from './map-engine';
 
 const city: CitySummary = {
@@ -22,6 +23,51 @@ const boundary: CachedBoundary = {
   },
   source: 'fixture',
   fetchedAt: '2026-08-16T00:00:00.000Z',
+};
+
+const countryPackage: CountryBoundaryPackage = {
+  schemaVersion: 1,
+  countryCode: 'CN',
+  boundaryVersion: 'fixture',
+  administrativeScheme: '地级行政区',
+  source: 'overture',
+  attribution: 'fixture',
+  features: [
+    {
+      type: 'Feature',
+      properties: {
+        areaId: 'CN:overture:beijing',
+        countryCode: 'CN',
+        sourceId: 'beijing',
+        adminLevel: 'prefecture',
+        nameZh: '北京',
+        nameLocal: 'Beijing',
+        aliases: [],
+        centroid: [116.4, 39.9],
+      },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [[[115, 39], [117, 39], [117, 41], [115, 39]]],
+      },
+    },
+    {
+      type: 'Feature',
+      properties: {
+        areaId: 'CN:overture:shanghai',
+        countryCode: 'CN',
+        sourceId: 'shanghai',
+        adminLevel: 'prefecture',
+        nameZh: '上海',
+        nameLocal: 'Shanghai',
+        aliases: [],
+        centroid: [121.47, 31.23],
+      },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [[[120.8, 30.7], [122, 30.7], [122, 31.8], [120.8, 30.7]]],
+      },
+    },
+  ],
 };
 
 function makeSvg(): SVGSVGElement {
@@ -129,6 +175,90 @@ describe('SVG map engine', () => {
 
     expect(svg.dataset.reducedMotion).toBe('true');
     expect(svg.querySelector('[data-map-viewport]')?.getAttribute('style') ?? '').not.toContain('transition');
+    engine.destroy();
+  });
+
+  it('navigates from an interactive world country by click and keyboard', () => {
+    const onCountrySelect = vi.fn();
+    const svg = makeSvg();
+    const engine = createMapEngine(svg, {
+      onCountrySelect,
+      worldMap: {
+        attribution: 'fixture',
+        countries: [{ id: 'CN', path: 'M0 0L10 0L10 10Z', label: { name: '中国', x: 5, y: 5 } }],
+      },
+    });
+    engine.showWorld([{ countryCode: 'CN', visitedCount: 2 }]);
+
+    const country = svg.querySelector<SVGPathElement>('[data-country="CN"]')!;
+    expect(country.getAttribute('role')).toBe('button');
+    expect(country.getAttribute('tabindex')).toBe('0');
+    expect(country.classList.contains('country-visited')).toBe(true);
+    country.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    country.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+    expect(onCountrySelect).toHaveBeenCalledTimes(2);
+    expect(onCountrySelect).toHaveBeenLastCalledWith('CN');
+    engine.destroy();
+  });
+
+  it('renders every country area and emits the same stable id for visited re-clicks', () => {
+    const onAreaSelect = vi.fn();
+    const svg = makeSvg();
+    const engine = createMapEngine(svg, {
+      onAreaSelect,
+      worldMap: { attribution: 'fixture', countries: [] },
+    });
+
+    engine.showCountry(countryPackage, new Set(['CN:overture:beijing']));
+
+    expect(svg.querySelectorAll('[data-area-id]')).toHaveLength(2);
+    const visited = svg.querySelector<SVGPathElement>('[data-area-id="CN:overture:beijing"]')!;
+    const unvisited = svg.querySelector<SVGPathElement>('[data-area-id="CN:overture:shanghai"]')!;
+    expect(visited.classList.contains('area-visited')).toBe(true);
+    expect(unvisited.classList.contains('area-unvisited')).toBe(true);
+    expect(visited.getAttribute('aria-label')).toContain('北京');
+
+    visited.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    visited.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onAreaSelect).toHaveBeenNthCalledWith(1, 'CN:overture:beijing');
+    expect(onAreaSelect).toHaveBeenNthCalledWith(2, 'CN:overture:beijing');
+    engine.destroy();
+  });
+
+  it('focuses an area without changing its identity or visited state', () => {
+    const svg = makeSvg();
+    const engine = createMapEngine(svg, { worldMap: { attribution: 'fixture', countries: [] } });
+    engine.showCountry(countryPackage, new Set(['CN:overture:beijing']));
+
+    engine.focusArea('CN:overture:beijing');
+
+    const area = svg.querySelector<SVGPathElement>('[data-area-id="CN:overture:beijing"]')!;
+    expect(document.activeElement).toBe(area);
+    expect(area.classList.contains('area-visited')).toBe(true);
+    expect(area.dataset.areaId).toBe('CN:overture:beijing');
+    engine.destroy();
+  });
+
+  it('adds a transparent delegated hit path for a visually tiny area', () => {
+    const onAreaSelect = vi.fn();
+    const svg = makeSvg();
+    const tinyArea: CityArea = {
+      ...countryPackage.features[0]!,
+      properties: { ...countryPackage.features[0]!.properties, areaId: 'CN:overture:tiny' as const, sourceId: 'tiny' },
+      geometry: {
+        type: 'Polygon' as const,
+        coordinates: [[[116, 39], [116.001, 39], [116.001, 39.001], [116, 39]]],
+      },
+    };
+    const engine = createMapEngine(svg, { onAreaSelect, worldMap: { attribution: 'fixture', countries: [] } });
+    engine.showCountry({ ...countryPackage, features: [tinyArea] }, new Set());
+
+    const hit = svg.querySelector<SVGPathElement>('[data-area-hit="CN:overture:tiny"]')!;
+    expect(hit).not.toBeNull();
+    expect(hit.getAttribute('aria-hidden')).toBe('true');
+    hit.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onAreaSelect).toHaveBeenCalledWith('CN:overture:tiny');
     engine.destroy();
   });
 });

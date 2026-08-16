@@ -1,4 +1,5 @@
 import type { CachedBoundary, CitySummary, MultiPolygonGeometry } from '../domain/types';
+import type { AreaId, CityArea, CountryBoundaryPackage, CountryCode } from '../areas/types';
 import { WORLD_MAP } from '../generated/world-map';
 import { normalizeAntimeridian, validateGeometry } from './geometry';
 import { project, unproject } from './projection';
@@ -45,15 +46,25 @@ export interface MapClick {
 export interface MapEngineOptions {
   worldMap?: WorldMapData;
   onMapClick?: (point: MapClick) => void;
+  onCountrySelect?: (countryCode: CountryCode) => void;
+  onAreaSelect?: (areaId: AreaId) => void;
   prefersReducedMotion?: boolean;
   maxGeometryVertices?: number;
 }
 
 export interface MapEngine {
   setVisits(visits: readonly MapVisit[]): void;
+  showWorld(summary?: readonly WorldCountrySummary[]): void;
+  showCountry(countryPackage: CountryBoundaryPackage, visitedAreaIds: ReadonlySet<string>): void;
   getViewState(): Readonly<MapViewState>;
   focusCity(city: CitySummary): void;
+  focusArea(areaId: AreaId): void;
   destroy(): void;
+}
+
+export interface WorldCountrySummary {
+  readonly countryCode: CountryCode;
+  readonly visitedCount: number;
 }
 
 interface PointerPosition {
@@ -115,6 +126,68 @@ function markerLabel(city: CitySummary): string {
   return `已到访：${city.zhName ?? city.name}${city.zhName && city.name !== city.zhName ? ` · ${city.name}` : ''}`;
 }
 
+function areaLabel(area: CityArea): string {
+  const primary = area.properties.nameZh ?? area.properties.nameLocal;
+  return area.properties.nameZh && area.properties.nameLocal !== area.properties.nameZh
+    ? `${primary} · ${area.properties.nameLocal}`
+    : primary;
+}
+
+function isTinyArea(area: CityArea): boolean {
+  const polygons = area.geometry.type === 'Polygon' ? [area.geometry.coordinates] : area.geometry.coordinates;
+  let minimumX = Number.POSITIVE_INFINITY;
+  let maximumX = Number.NEGATIVE_INFINITY;
+  let minimumY = Number.POSITIVE_INFINITY;
+  let maximumY = Number.NEGATIVE_INFINITY;
+  for (const polygon of polygons) {
+    for (const ring of polygon) {
+      for (const [longitude, latitude] of ring) {
+        const point = project(longitude, latitude);
+        minimumX = Math.min(minimumX, point.x * MAP_WIDTH);
+        maximumX = Math.max(maximumX, point.x * MAP_WIDTH);
+        minimumY = Math.min(minimumY, point.y * MAP_HEIGHT);
+        maximumY = Math.max(maximumY, point.y * MAP_HEIGHT);
+      }
+    }
+  }
+  return Math.max(maximumX - minimumX, maximumY - minimumY) < 4;
+}
+
+function fitAreas(areas: readonly CityArea[], setState: (state: MapViewState) => void): void {
+  let minimumX = Number.POSITIVE_INFINITY;
+  let maximumX = Number.NEGATIVE_INFINITY;
+  let minimumY = Number.POSITIVE_INFINITY;
+  let maximumY = Number.NEGATIVE_INFINITY;
+  for (const area of areas) {
+    const polygons = area.geometry.type === 'Polygon'
+      ? [area.geometry.coordinates]
+      : area.geometry.coordinates;
+    for (const polygon of polygons) {
+      for (const ring of polygon) {
+        for (const [longitude, latitude] of ring) {
+          const point = project(longitude, latitude);
+          minimumX = Math.min(minimumX, point.x * MAP_WIDTH);
+          maximumX = Math.max(maximumX, point.x * MAP_WIDTH);
+          minimumY = Math.min(minimumY, point.y * MAP_HEIGHT);
+          maximumY = Math.max(maximumY, point.y * MAP_HEIGHT);
+        }
+      }
+    }
+  }
+  if (![minimumX, maximumX, minimumY, maximumY].every(Number.isFinite)) {
+    setState({ zoom: 1, offsetX: 0, offsetY: 0 });
+    return;
+  }
+  const width = Math.max(maximumX - minimumX, 1);
+  const height = Math.max(maximumY - minimumY, 1);
+  const zoom = clamp(Math.min(MAP_WIDTH * 0.82 / width, MAP_HEIGHT * 0.82 / height), MIN_ZOOM, MAX_ZOOM);
+  setState({
+    zoom,
+    offsetX: MAP_WIDTH / 2 - (minimumX + maximumX) / 2 * zoom,
+    offsetY: MAP_HEIGHT / 2 - (minimumY + maximumY) / 2 * zoom,
+  });
+}
+
 export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = {}): MapEngine {
   const worldMap: WorldMapData = options.worldMap ?? WORLD_MAP as unknown as WorldMapData;
   const reducedMotion = options.prefersReducedMotion
@@ -149,6 +222,9 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
     path.dataset.country = country.id;
     path.setAttribute('d', country.path);
     path.setAttribute('vector-effect', 'non-scaling-stroke');
+    path.setAttribute('tabindex', '0');
+    path.setAttribute('role', 'button');
+    path.setAttribute('aria-label', `进入${country.label?.name ?? country.id}`);
     countriesLayer.append(path);
     if (country.label
       && typeof country.label.name === 'string'
@@ -175,6 +251,7 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
   const pointers = new Map<number, PointerPosition>();
   let pinchDistance: number | undefined;
   let pinchState: MapViewState | undefined;
+  const areaById = new Map<AreaId, CityArea>();
 
   const applyTransform = (): void => {
     viewport.setAttribute('transform', `translate(${state.offsetX.toFixed(3)} ${state.offsetY.toFixed(3)}) scale(${state.zoom.toFixed(4)})`);
@@ -251,7 +328,24 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
       suppressNextClick = false;
       return;
     }
-    if (event.target instanceof Element && event.target.closest('[data-visited-boundary], [data-visited-point]')) return;
+    if (event.target instanceof Element) {
+      const area = event.target.closest<SVGElement>('[data-area-id]');
+      if (area?.dataset.areaId) {
+        options.onAreaSelect?.(area.dataset.areaId as AreaId);
+        return;
+      }
+      const areaHit = event.target.closest<SVGElement>('[data-area-hit]');
+      if (areaHit?.dataset.areaHit) {
+        options.onAreaSelect?.(areaHit.dataset.areaHit as AreaId);
+        return;
+      }
+      const country = event.target.closest<SVGElement>('[data-country]');
+      if (country?.dataset.country && /^[A-Z]{2}$/.test(country.dataset.country)) {
+        options.onCountrySelect?.(country.dataset.country as CountryCode);
+        return;
+      }
+      if (event.target.closest('[data-visited-boundary], [data-visited-point]')) return;
+    }
     const point = eventPoint(svg, event.clientX, event.clientY);
     const worldX = (point.x - state.offsetX) / state.zoom;
     const worldY = (point.y - state.offsetY) / state.zoom;
@@ -260,6 +354,20 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
   };
 
   const onKeyDown = (event: KeyboardEvent): void => {
+    if ((event.key === 'Enter' || event.key === ' ') && event.target instanceof Element) {
+      const area = event.target.closest<SVGElement>('[data-area-id]');
+      if (area?.dataset.areaId) {
+        event.preventDefault();
+        options.onAreaSelect?.(area.dataset.areaId as AreaId);
+        return;
+      }
+      const country = event.target.closest<SVGElement>('[data-country]');
+      if (country?.dataset.country && /^[A-Z]{2}$/.test(country.dataset.country)) {
+        event.preventDefault();
+        options.onCountrySelect?.(country.dataset.country as CountryCode);
+        return;
+      }
+    }
     const centerX = MAP_WIDTH / 2;
     const centerY = MAP_HEIGHT / 2;
     if (event.key === '+' || event.key === '=') {
@@ -336,6 +444,64 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
         }
       }
     },
+    showWorld(summary = []): void {
+      if (destroyed) return;
+      areaById.clear();
+      boundariesLayer.replaceChildren();
+      pointsLayer.replaceChildren();
+      countriesLayer.style.display = '';
+      labelsLayer.style.display = '';
+      svg.setAttribute('aria-label', '世界旅行足迹地图，选择国家进入城市地图');
+      const countByCountry = new Map(summary.map((item) => [item.countryCode, item.visitedCount]));
+      for (const country of countriesLayer.querySelectorAll<SVGPathElement>('[data-country]')) {
+        const count = countByCountry.get(country.dataset.country as CountryCode) ?? 0;
+        country.classList.toggle('country-visited', count > 0);
+        if (count > 0) country.dataset.visitedCount = String(count);
+        else delete country.dataset.visitedCount;
+      }
+      setState({ zoom: 1, offsetX: 0, offsetY: 0 });
+    },
+    showCountry(countryPackage, visitedAreaIds): void {
+      if (destroyed) return;
+      countriesLayer.style.display = 'none';
+      labelsLayer.style.display = 'none';
+      pointsLayer.replaceChildren();
+      boundariesLayer.replaceChildren();
+      areaById.clear();
+      svg.setAttribute('aria-label', `${countryPackage.countryCode} ${countryPackage.administrativeScheme}地图，选择城市区域点亮`);
+      for (const area of countryPackage.features) {
+        try {
+          const geometry = validateGeometry(area.geometry, { maxVertices: options.maxGeometryVertices ?? 100_000 });
+          const pathData = geometryPath(geometry);
+          if (!pathData || !isSafeGeneratedPath(pathData)) continue;
+          const path = createSvgElement('path');
+          path.dataset.areaId = area.properties.areaId;
+          path.setAttribute('d', pathData);
+          path.setAttribute('fill-rule', 'evenodd');
+          path.setAttribute('vector-effect', 'non-scaling-stroke');
+          path.setAttribute('tabindex', '0');
+          path.setAttribute('role', 'button');
+          path.setAttribute('aria-label', `${visitedAreaIds.has(area.properties.areaId) ? '已点亮' : '点亮'}${areaLabel(area)}`);
+          path.classList.add(visitedAreaIds.has(area.properties.areaId) ? 'area-visited' : 'area-unvisited');
+          if (isTinyArea(area)) {
+            const hit = createSvgElement('path');
+            hit.dataset.areaHit = area.properties.areaId;
+            hit.setAttribute('d', pathData);
+            hit.setAttribute('fill', 'transparent');
+            hit.setAttribute('stroke', 'transparent');
+            hit.setAttribute('stroke-width', '12');
+            hit.setAttribute('vector-effect', 'non-scaling-stroke');
+            hit.setAttribute('aria-hidden', 'true');
+            boundariesLayer.append(hit);
+          }
+          boundariesLayer.append(path);
+          areaById.set(area.properties.areaId, area);
+        } catch {
+          // Runtime packages are validated before rendering; a defensive skip prevents one feature poisoning the map.
+        }
+      }
+      fitAreas([...areaById.values()], setState);
+    },
     getViewState(): Readonly<MapViewState> {
       return Object.freeze({ ...state });
     },
@@ -343,6 +509,21 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
       if (destroyed) return;
       const location = project(city.lon, city.lat);
       const zoom = Math.max(state.zoom, 3);
+      setState({
+        zoom,
+        offsetX: MAP_WIDTH / 2 - location.x * MAP_WIDTH * zoom,
+        offsetY: MAP_HEIGHT / 2 - location.y * MAP_HEIGHT * zoom,
+      });
+    },
+    focusArea(areaId): void {
+      if (destroyed) return;
+      const area = areaById.get(areaId);
+      if (!area) return;
+      const path = [...boundariesLayer.querySelectorAll<SVGPathElement>('[data-area-id]')]
+        .find((candidate) => candidate.dataset.areaId === areaId);
+      path?.focus();
+      const location = project(area.properties.centroid[0], area.properties.centroid[1]);
+      const zoom = Math.max(state.zoom, 4);
       setState({
         zoom,
         offsetX: MAP_WIDTH / 2 - location.x * MAP_WIDTH * zoom,

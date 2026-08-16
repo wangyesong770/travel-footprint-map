@@ -16,8 +16,11 @@ function setup() {
   let visits: readonly MapVisit[] = [];
   const mapEngine: MapEngine = {
     setVisits(next) { visits = next; },
+    showWorld: vi.fn(),
+    showCountry: vi.fn(),
     getViewState: () => ({ zoom: 1, offsetX: 0, offsetY: 0 }),
     focusCity: vi.fn(),
+    focusArea: vi.fn(),
     destroy: vi.fn(),
   };
   const boundary = vi.fn(async (): Promise<CachedBoundary | undefined> => undefined);
