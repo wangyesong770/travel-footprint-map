@@ -149,6 +149,66 @@ test('CLI rejects input file path traversal through country names', async () => 
   }
 });
 
+test('builder consumes selector output and derives package/index identity from divisionId', async () => {
+  const inputDir = await mkdtemp(path.join(tmpdir(), 'selected-input-'));
+  const outputDir = await mkdtemp(path.join(tmpdir(), 'selected-output-'));
+  try {
+    const input = await fixture();
+    input.features[0].properties.divisionId = 'stable-beijing';
+    input.features.push({
+      ...JSON.parse(JSON.stringify(input.features[0])),
+      id: 'excluded-region-area',
+      properties: {
+        ...input.features[0].properties,
+        divisionId: 'excluded-region',
+        subtype: 'region',
+      },
+    });
+    await writeFile(path.join(inputDir, 'CN.geojson'), JSON.stringify(input));
+
+    const manifest = await buildCountryBoundaries({ inputDir, outputDir });
+    const topology = JSON.parse(await readFile(path.join(outputDir, 'CN.topojson'), 'utf8'));
+    const index = JSON.parse(await readFile(path.join(outputDir, 'area-index.json'), 'utf8'));
+
+    assert.equal(manifest.CN.featureCount, 2);
+    assert.ok(topology.objects.areas.geometries.some(({ properties }) => properties.sourceId === 'stable-beijing'));
+    assert.ok(index.some(({ kind, areaId }) => kind === 'area' && areaId === 'CN:overture:stable-beijing'));
+    assert.ok(!index.some(({ kind, areaId }) => kind === 'area' && areaId === 'CN:overture:excluded-region'));
+  } finally {
+    await Promise.all([rm(inputDir, { recursive: true, force: true }), rm(outputDir, { recursive: true, force: true })]);
+  }
+});
+
+test('builder accepts extractor camelCase properties while preserving the division identity chain', async () => {
+  const inputDir = await mkdtemp(path.join(tmpdir(), 'extractor-shape-input-'));
+  const outputDir = await mkdtemp(path.join(tmpdir(), 'extractor-shape-output-'));
+  try {
+    const input = await fixture();
+    input.features = input.features.map((feature, index) => {
+      const properties = { ...feature.properties };
+      delete properties.admin_level;
+      properties.divisionId = `extractor-division-${index}`;
+      properties.sourceCountryCode = 'CN';
+      properties.adminLevel = 2;
+      properties.localType = 'prefecture';
+      return { ...feature, id: `extractor-area-${index}`, properties };
+    });
+    await writeFile(path.join(inputDir, 'CN.geojson'), JSON.stringify(input));
+
+    const manifest = await buildCountryBoundaries({ inputDir, outputDir });
+    const topology = JSON.parse(await readFile(path.join(outputDir, 'CN.topojson'), 'utf8'));
+    const index = JSON.parse(await readFile(path.join(outputDir, 'area-index.json'), 'utf8'));
+    const packageIds = topology.objects.areas.geometries.map(({ properties }) => properties.areaId);
+    const indexIds = index.filter(({ kind }) => kind === 'area').map(({ areaId }) => areaId);
+
+    assert.equal(manifest.CN.featureCount, 2);
+    assert.deepEqual(packageIds, ['CN:overture:extractor-division-0', 'CN:overture:extractor-division-1']);
+    assert.deepEqual(indexIds, packageIds);
+  } finally {
+    await Promise.all([rm(inputDir, { recursive: true, force: true }), rm(outputDir, { recursive: true, force: true })]);
+  }
+});
+
 function signedArea(ring) {
   let area = 0;
   for (let index = 0; index < ring.length - 1; index += 1) {

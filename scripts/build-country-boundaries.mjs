@@ -8,13 +8,24 @@ import { pathToFileURL } from 'node:url';
 import { topology } from 'topojson-server';
 import { presimplify, simplify } from 'topojson-simplify';
 
+import { selectCountryFeatures } from './audit/apply-selector.mjs';
 import { normalizeFeatureCollection, normalizeMetadata } from './lib/boundary-normalize.mjs';
 
 const MAX_INPUT_BYTES = 256 * 1024 * 1024;
 const QUANTIZATION = 100_000;
 const COUNTRY_CONFIG = Object.freeze({
-  CN: Object.freeze({ administrativeScheme: '地级行政区', acceptedLevels: ['prefecture'], simplificationTolerance: 1e-10, nameZh: '中国', nameLocal: 'China', aliases: ['中华人民共和国', 'PRC'] }),
-  US: Object.freeze({ administrativeScheme: '县及独立市等同行政区', acceptedLevels: ['county', 'independent-city'], simplificationTolerance: 1e-10, nameZh: '美国', nameLocal: 'United States', aliases: ['USA', 'US'] }),
+  CN: Object.freeze({
+    sovereignCode: 'CN', sourceCountryCodes: ['CN'], productLevel: 'prefecture',
+    overtureSelector: { subtypes: ['prefecture'], adminLevels: [2], localTypeRules: [] },
+    allowlist: [], denylist: [], administrativeScheme: '地级行政区',
+    simplificationTolerance: 1e-10, nameZh: '中国', nameLocal: 'China', aliases: ['中华人民共和国', 'PRC'],
+  }),
+  US: Object.freeze({
+    sovereignCode: 'US', sourceCountryCodes: ['US'], productLevel: 'county-equivalent',
+    overtureSelector: { subtypes: ['county', 'independent-city'], adminLevels: [2], localTypeRules: [] },
+    allowlist: [], denylist: [], administrativeScheme: '县及独立市等同行政区',
+    simplificationTolerance: 1e-10, nameZh: '美国', nameLocal: 'United States', aliases: ['USA', 'US'],
+  }),
 });
 
 export async function buildCountryBoundaries({ inputDir, outputDir, indexModulePath }) {
@@ -38,7 +49,8 @@ export async function buildCountryBoundaries({ inputDir, outputDir, indexModuleP
     if (fileStat.size === 0 || fileStat.size > MAX_INPUT_BYTES) throw new Error(`input size limit exceeded: ${entry.name}`);
     const raw = await readFile(inputPath, 'utf8');
     const parsed = parseJson(raw, entry.name);
-    const normalized = normalizeFeatureCollection(parsed, countryCode, config);
+    const selected = selectCountryFeatures(toSelectorRows(parsed, countryCode), config);
+    const normalized = normalizeFeatureCollection(toSelectedFeatureCollection(parsed, selected), countryCode, { acceptedLevels: [config.productLevel] });
     const metadata = normalizeMetadata(parsed.metadata);
     const packageObject = createTopologyPackage(countryCode, config, metadata, normalized);
     const packageBytes = Buffer.from(`${canonicalJson(packageObject)}\n`, 'utf8');
@@ -85,6 +97,41 @@ export async function buildCountryBoundaries({ inputDir, outputDir, indexModuleP
     await writeFile(indexModulePath, source, 'utf8');
   }
   return manifest;
+}
+
+function toSelectorRows(collection, countryCode) {
+  if (!collection || !Array.isArray(collection.features)) return [];
+  return collection.features.map((feature) => ({
+    divisionId: feature?.properties?.divisionId ?? feature?.id,
+    divisionAreaId: feature?.id,
+    sourceCountryCode: feature?.properties?.sourceCountryCode ?? feature?.properties?.country ?? countryCode,
+    subtype: feature?.properties?.subtype,
+    adminLevel: feature?.properties?.adminLevel ?? feature?.properties?.admin_level,
+    localType: feature?.properties?.localType ?? feature?.properties?.local_type,
+    isLand: feature?.properties?.isLand ?? feature?.properties?.is_land ?? true,
+    names: feature?.properties?.names,
+    aliases: feature?.properties?.aliases,
+    geometry: feature?.geometry,
+  }));
+}
+
+function toSelectedFeatureCollection(original, selected) {
+  return {
+    type: 'FeatureCollection',
+    metadata: original.metadata,
+    features: selected.map((row) => ({
+      type: 'Feature',
+      id: row.divisionAreaId,
+      properties: {
+        divisionId: row.divisionId,
+        country: row.sovereignCode,
+        subtype: row.productLevel,
+        names: row.names,
+        aliases: row.aliases,
+      },
+      geometry: row.geometry,
+    })),
+  };
 }
 
 function indexIdentity(record) {

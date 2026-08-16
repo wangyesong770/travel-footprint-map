@@ -17,7 +17,7 @@ export function normalizeFeatureCollection(input, expectedCountryCode, options =
     if (!isPlainObject(feature) || feature.type !== 'Feature' || !isPlainObject(feature.properties)) {
       throw new Error(`feature ${index} must be a GeoJSON Feature`);
     }
-    const sourceId = boundedString(feature.id, 'source ID');
+    const sourceId = boundedString(feature.properties.divisionId ?? feature.id, 'source ID');
     if (sourceId.includes(':')) throw new Error('source ID must not contain a colon');
     if (identities.has(sourceId)) throw new Error(`duplicate source ID: ${sourceId}`);
     identities.add(sourceId);
