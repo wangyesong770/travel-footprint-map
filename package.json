@@ -7,6 +7,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build && node scripts/inline-build.mjs",
     "audit:extract": "node scripts/audit/extract-overture.mjs",
+    "audit:profile-country": "node scripts/audit/profile-country.mjs",
     "audit:country": "node scripts/audit/country-runner.mjs",
     "audit:selector": "node scripts/audit/verify-selector-evidence.mjs",
     "audit:compare": "node scripts/audit/compare-releases.mjs",
