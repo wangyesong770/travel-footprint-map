@@ -1,0 +1,73 @@
+name: Quarterly boundary review
+description: Review an Overture candidate release before rebuilding the atomic global boundary set.
+title: "[Boundary review] FROM → CANDIDATE"
+labels:
+  - data-audit
+body:
+  - type: markdown
+    attributes:
+      value: Candidate data must not be published until this review and the global gate both pass.
+  - type: input
+    id: candidate_release
+    attributes:
+      label: Candidate release
+      description: Exact Overture release identifier, for example 2026-09-16.0.
+    validations:
+      required: true
+  - type: input
+    id: schema_version
+    attributes:
+      label: Schema version
+      description: Exact Overture schema version used by the candidate.
+    validations:
+      required: true
+  - type: input
+    id: source_snapshot_checksum
+    attributes:
+      label: Source snapshot checksum
+      description: SHA-256 of the canonical candidate source snapshot manifest.
+    validations:
+      required: true
+  - type: textarea
+    id: changed_countries
+    attributes:
+      label: Changed countries
+      description: Sovereign country codes and the corresponding change-report reasons.
+    validations:
+      required: true
+  - type: textarea
+    id: migration_counts
+    attributes:
+      label: Migration counts
+      description: Counts for one-to-one replacements, one-to-many splits, and many-to-one merges.
+    validations:
+      required: true
+  - type: textarea
+    id: license_changes
+    attributes:
+      label: License changes
+      description: Record upstream attribution or license changes; write "none" only after review.
+    validations:
+      required: true
+  - type: input
+    id: reviewer
+    attributes:
+      label: Reviewer
+      description: GitHub handle of the accountable human reviewer.
+    validations:
+      required: true
+  - type: checkboxes
+    id: global_gate_rerun
+    attributes:
+      label: Global gate rerun checklist
+      options:
+        - label: Candidate source snapshot is complete and checksum-verified.
+          required: true
+        - label: Every changed country has passed selector, geometry, identity, and reference QA.
+          required: true
+        - label: All identity migrations were manually reviewed; splits require user confirmation.
+          required: true
+        - label: License and attribution obligations were reviewed.
+          required: true
+        - label: The complete global gate was rerun and produced one atomic release-ready artifact.
+          required: true

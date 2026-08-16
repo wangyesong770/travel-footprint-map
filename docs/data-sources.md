@@ -35,3 +35,17 @@ Overture Divisions 包含 OpenStreetMap 贡献数据，按 [Open Database Licens
 常规 CI 中的 fixture 任务只验证提取、QA、报告和全局门禁的程序契约，不产生生产就绪声明。生产 artifact 只能在 `main` 分支手动触发，经 `production-boundaries` 环境审批，并对仓库内的完整包和报告重新执行门禁。CI 只缓存 npm 下载，不缓存国家包、审核报告或 `release-ready.json`；artifact 上传前再次检查 manifest、area index、release-ready 和 summary 均存在且非空。artifact 名同时包含 Overture release 和 CI run ID，因此失败或新版本不会覆盖上一套可回滚 artifact。
 
 仓库分支保护应把 `extract-fixture`、`country-qa`、`evidence`、`global-gate` 和 `build` 设为必需检查。生产发布仅允许从受保护分支手动触发，并由环境审批控制；本工作流不假定仓库已开启这些外部治理设置。
+
+## 季度 release 比较与身份迁移
+
+候选 Overture release 不会自动进入生产。先为基线和候选 release 各生成 `release.json` 与按主权国家拆分的 `countries/<CC>.jsonl` 身份流，再运行：
+
+```sh
+npm run audit:compare -- --from 2026-06-17.0 --to 2026-09-16.0
+```
+
+默认输入位于 `data-audit/release-inputs/<release>/`，源对象证据位于 `data-audit/source-snapshots/<release>.json`；可以用 `--from-dir`、`--to-dir`、`--from-manifest`、`--to-manifest` 和 `--migrations` 显式覆盖输入。CLI 输出根固定为 `data-audit/change-reports`，报告文件名固定由两个 release 派生为 `<from>--<to>.json`；CLI 不接受 `--output` 或输出目录覆盖。纯 `compareReleases()` 的 `changeReportsDir` 只供测试和受控内部组合使用，它不是 CLI 权限边界。身份流每行仅承载稳定 `divisionId` 与确定性 `geometryHash`，比较器逐国读取，避免同时载入全球几何。
+
+结果只有 `no-review-required`、`manual-review-required` 和 `blocked` 三种状态。几何微调不改变身份；区域数量变化恰好 2% 不触发数量阈值，超过 2%、ID 删除、selector 或政治视角变化必须人工审核。schema 变化、国家集合变化、缺失/混用源快照、无效身份流或无效迁移直接阻断。比较器只原子写入 change report，绝不生成国家包、生产 manifest 或 `release-ready.json`；审核完成后仍必须重新执行完整逐国 QA 与全球发布门禁。
+
+`division-id-migrations.json` 是版本控制的跨 release 身份治理记录。`one-to-one` 与 `many-to-one` 的目标必须存在于候选身份流；`one-to-many` 必须设置 `userConfirmationRequired: true`，并且禁止提供自动选定目标。文件可保留历史 release 的迁移，比较时只应用当前 `fromRelease → toRelease` 区间。每次季度审核还要核实上游旧 release 是否仍可访问；源数据超过 Overture 留存窗口后，以仓库中的对象清单、字节数、ETag 和 SHA-256 快照作为可追溯证据，但不得伪称仍可重新下载。
