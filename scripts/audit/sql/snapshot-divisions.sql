@@ -4,9 +4,11 @@ INSTALL spatial;
 LOAD spatial;
 SET s3_region = 'us-west-2';
 SET memory_limit = '2GB';
-SET threads = 2;
+SET threads = 1;
 SET temp_directory = '__TEMP_DIRECTORY__';
 SET preserve_insertion_order = false;
+SET partitioned_write_max_open_files = 8;
+SET partitioned_write_flush_threshold = 65536;
 
 COPY (
   SELECT

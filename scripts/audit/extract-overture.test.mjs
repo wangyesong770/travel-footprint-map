@@ -110,7 +110,9 @@ describe('fixed-release Overture extractor', () => {
     expect(calls).toHaveLength(2);
     const sql = calls[1].options.input;
     expect(sql).toContain("SET memory_limit = '2GB'");
-    expect(sql).toMatch(/SET threads = \d+/);
+    expect(sql).toContain('SET threads = 1');
+    expect(sql).toContain('SET partitioned_write_max_open_files = 8');
+    expect(sql).toContain('SET partitioned_write_flush_threshold = 65536');
     expect(sql).toContain('SET temp_directory =');
     const divisionUrl = 's3://overturemaps-us-west-2/release/2026-06-17.0/theme=divisions/type=division/*';
     const areaUrl = 's3://overturemaps-us-west-2/release/2026-06-17.0/theme=divisions/type=division_area/*';
