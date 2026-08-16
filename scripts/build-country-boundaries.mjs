@@ -13,16 +13,18 @@ import { normalizeFeatureCollection, normalizeMetadata } from './lib/boundary-no
 const MAX_INPUT_BYTES = 256 * 1024 * 1024;
 const QUANTIZATION = 100_000;
 const COUNTRY_CONFIG = Object.freeze({
-  CN: Object.freeze({ administrativeScheme: '地级行政区', acceptedLevels: ['prefecture'], simplificationTolerance: 1e-10 }),
-  US: Object.freeze({ administrativeScheme: '县及独立市等同行政区', acceptedLevels: ['county', 'independent-city'], simplificationTolerance: 1e-10 }),
+  CN: Object.freeze({ administrativeScheme: '地级行政区', acceptedLevels: ['prefecture'], simplificationTolerance: 1e-10, nameZh: '中国', nameLocal: 'China', aliases: ['中华人民共和国', 'PRC'] }),
+  US: Object.freeze({ administrativeScheme: '县及独立市等同行政区', acceptedLevels: ['county', 'independent-city'], simplificationTolerance: 1e-10, nameZh: '美国', nameLocal: 'United States', aliases: ['USA', 'US'] }),
 });
 
-export async function buildCountryBoundaries({ inputDir, outputDir }) {
+export async function buildCountryBoundaries({ inputDir, outputDir, indexModulePath }) {
   if (typeof inputDir !== 'string' || typeof outputDir !== 'string') throw new Error('inputDir and outputDir are required');
   const entries = (await readdir(inputDir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name, 'en'));
   if (entries.length === 0) throw new Error('input directory contains no country files');
   const manifest = {};
   const outputs = [];
+  const indexRecords = [];
+  const indexIds = new Set();
 
   for (const entry of entries) {
     if (!entry.isFile() || !/^[A-Z]{2}\.geojson$/.test(entry.name)) {
@@ -54,13 +56,59 @@ export async function buildCountryBoundaries({ inputDir, outputDir }) {
       source: metadata.source,
       attribution: metadata.attribution,
     };
+    indexRecords.push({
+      kind: 'country', countryCode, boundaryVersion: metadata.boundaryVersion,
+      nameZh: config.nameZh, nameLocal: config.nameLocal, aliases: config.aliases,
+    });
+    for (const { properties } of normalized.features) {
+      if (indexIds.has(properties.areaId)) throw new Error(`duplicate area index ID: ${properties.areaId}`);
+      indexIds.add(properties.areaId);
+      indexRecords.push({
+        kind: 'area', areaId: properties.areaId, countryCode, boundaryVersion: metadata.boundaryVersion,
+        adminLevel: properties.adminLevel, ...(properties.nameZh === undefined ? {} : { nameZh: properties.nameZh }),
+        nameLocal: properties.nameLocal, aliases: properties.aliases,
+      });
+    }
     outputs.push([`${countryCode}.topojson`, packageBytes]);
   }
+
+  indexRecords.sort((left, right) => indexIdentity(left).localeCompare(indexIdentity(right), 'en'));
+  assertIndexParity(indexRecords, outputs);
 
   await mkdir(outputDir, { recursive: true });
   for (const [fileName, bytes] of outputs) await writeFile(path.join(outputDir, fileName), bytes);
   await writeFile(path.join(outputDir, 'manifest.json'), `${canonicalJson(manifest)}\n`, 'utf8');
+  await writeFile(path.join(outputDir, 'area-index.json'), `${canonicalJson(indexRecords)}\n`, 'utf8');
+  if (indexModulePath !== undefined) {
+    await mkdir(path.dirname(indexModulePath), { recursive: true });
+    const source = `import type { AreaIndexRecord } from '../areas/area-index';\n\nexport const AREA_INDEX_RECORDS = ${escapeInlineScript(canonicalJson(indexRecords))} as const satisfies readonly AreaIndexRecord[];\n`;
+    await writeFile(indexModulePath, source, 'utf8');
+  }
   return manifest;
+}
+
+function indexIdentity(record) {
+  return record.kind === 'country' ? `0:${record.countryCode}` : `1:${record.areaId}`;
+}
+
+function assertIndexParity(records, outputs) {
+  const packageIds = new Set();
+  for (const [fileName, bytes] of outputs) {
+    const packageObject = JSON.parse(bytes.toString('utf8'));
+    for (const geometry of packageObject.objects.areas.geometries) {
+      const areaId = geometry.properties?.areaId;
+      if (typeof areaId !== 'string' || packageIds.has(areaId)) throw new Error(`duplicate or missing package area ID in ${fileName}`);
+      packageIds.add(areaId);
+    }
+  }
+  const indexAreaIds = records.filter(({ kind }) => kind === 'area').map(({ areaId }) => areaId);
+  if (indexAreaIds.length !== packageIds.size || indexAreaIds.some((areaId) => !packageIds.has(areaId))) {
+    throw new Error('area index IDs do not match country packages');
+  }
+}
+
+function escapeInlineScript(value) {
+  return value.replaceAll('<', '\\u003c').replaceAll('>', '\\u003e').replaceAll('&', '\\u0026').replaceAll('\u2028', '\\u2028').replaceAll('\u2029', '\\u2029');
 }
 
 function createTopologyPackage(countryCode, config, metadata, collection) {
@@ -101,10 +149,10 @@ function parseJson(raw, fileName) {
 }
 
 function parseCliArguments(argv) {
-  if (argv.length !== 4 || argv[0] !== '--input' || argv[2] !== '--output') {
-    throw new Error('usage: node scripts/build-country-boundaries.mjs --input <dir> --output <dir>');
+  if ((argv.length !== 4 && argv.length !== 6) || argv[0] !== '--input' || argv[2] !== '--output' || (argv.length === 6 && argv[4] !== '--index-module')) {
+    throw new Error('usage: node scripts/build-country-boundaries.mjs --input <dir> --output <dir> [--index-module <file>]');
   }
-  return { inputDir: path.resolve(argv[1]), outputDir: path.resolve(argv[3]) };
+  return { inputDir: path.resolve(argv[1]), outputDir: path.resolve(argv[3]), ...(argv[5] === undefined ? {} : { indexModulePath: path.resolve(argv[5]) }) };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -79,7 +79,7 @@ test('emits consumable TopoJSON and byte-identical builds with matching SHA-256 
     assert.equal(firstManifest.CN.checksum, secondManifest.CN.checksum);
     assert.equal(firstManifest.CN.featureCount, 2);
     assert.match(firstManifest.CN.attribution, /Overture Maps Foundation/);
-    for (const fileName of ['manifest.json', 'CN.topojson', 'US.topojson']) {
+    for (const fileName of ['manifest.json', 'area-index.json', 'CN.topojson', 'US.topojson']) {
       assert.deepEqual(await readFile(path.join(firstDir, fileName)), await readFile(path.join(secondDir, fileName)));
     }
 
@@ -94,6 +94,44 @@ test('emits consumable TopoJSON and byte-identical builds with matching SHA-256 
     const packageBytes = await readFile(path.join(firstDir, 'CN.topojson'));
     assert.equal(packageBytes.byteLength, firstManifest.CN.byteSize);
     assert.equal(createHash('sha256').update(packageBytes).digest('hex'), firstManifest.CN.checksum);
+  } finally {
+    await Promise.all([rm(firstDir, { recursive: true, force: true }), rm(secondDir, { recursive: true, force: true })]);
+  }
+});
+
+test('emits a compact geometry-free index with exact package ID parity and deterministic safe source', async () => {
+  const firstDir = await mkdtemp(path.join(tmpdir(), 'area-index-a-'));
+  const secondDir = await mkdtemp(path.join(tmpdir(), 'area-index-b-'));
+  const firstModule = path.join(firstDir, 'area-index.data.ts');
+  const secondModule = path.join(secondDir, 'area-index.data.ts');
+  try {
+    const maliciousInput = await fixture();
+    maliciousInput.features[0].properties.aliases.push('</script><script>alert(1)</script>');
+    const inputDir = await mkdtemp(path.join(tmpdir(), 'area-index-input-'));
+    try {
+      await writeFile(path.join(inputDir, 'CN.geojson'), JSON.stringify(maliciousInput));
+      await buildCountryBoundaries({ inputDir, outputDir: firstDir, indexModulePath: firstModule });
+      await buildCountryBoundaries({ inputDir, outputDir: secondDir, indexModulePath: secondModule });
+
+      const records = JSON.parse(await readFile(path.join(firstDir, 'area-index.json'), 'utf8'));
+      const topology = JSON.parse(await readFile(path.join(firstDir, 'CN.topojson'), 'utf8'));
+      const areaRecords = records.filter(({ kind }) => kind === 'area');
+      assert.deepEqual(
+        areaRecords.map(({ areaId }) => areaId),
+        topology.objects.areas.geometries.map(({ properties }) => properties.areaId),
+      );
+      assert.ok(records.some(({ kind, countryCode }) => kind === 'country' && countryCode === 'CN'));
+      assert.ok(areaRecords.every((record) => !('geometry' in record) && !('centroid' in record)));
+      assert.equal(new Set(areaRecords.map(({ areaId }) => areaId)).size, areaRecords.length);
+
+      const source = await readFile(firstModule, 'utf8');
+      assert.doesNotMatch(source, /<\/script>/i);
+      assert.match(source, /\\u003c\/script\\u003e/i);
+      assert.deepEqual(await readFile(firstModule), await readFile(secondModule));
+      assert.deepEqual(await readFile(path.join(firstDir, 'area-index.json')), await readFile(path.join(secondDir, 'area-index.json')));
+    } finally {
+      await rm(inputDir, { recursive: true, force: true });
+    }
   } finally {
     await Promise.all([rm(firstDir, { recursive: true, force: true }), rm(secondDir, { recursive: true, force: true })]);
   }
