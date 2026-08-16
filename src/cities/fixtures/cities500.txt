@@ -1,0 +1,2 @@
+2867714	München	Munich	Muenchen,Munich	48.13743	11.57549	P	PPLA	DE		02				1260391			Europe/Berlin	2026-08-16
+3448439	São Paulo	Sao Paulo	Sampa	-23.5475	-46.63611	P	PPLA	BR		27				12400232			America/Sao_Paulo	2026-08-16

@@ -1,0 +1,3 @@
+#ISO	ISO3	ISO-Numeric	fips	Country	Capital	Area	Population	Continent
+DE	DEU	276	GM	Germany	Berlin	357021	83190556	EU
+BR	BRA	076	BR	Brazil	Brasilia	8515767	203062512	SA
