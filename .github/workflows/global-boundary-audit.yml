@@ -1,0 +1,151 @@
+name: Global boundary audit
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish-production:
+        description: Verify the complete audited release and retain a production artifact
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22'
+  OVERTURE_RELEASE: '2026-06-17.0'
+
+jobs:
+  extract-fixture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Verify deterministic fixture extraction without network
+        run: npm test -- scripts/audit/extract-overture.test.mjs
+
+  country-qa:
+    needs: extract-fixture
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Verify selectors and country QA fixtures
+        run: npm test -- scripts/audit/apply-selector.test.mjs scripts/audit/qa-country.test.mjs
+
+  evidence:
+    needs: country-qa
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Verify deterministic evidence and checksum binding
+        run: npm test -- scripts/audit/write-report.test.mjs
+      - name: Retain non-production audit diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-diagnostics-${{ github.run_id }}
+          path: data-audit/reports/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  global-gate:
+    needs: evidence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Verify exact-set all-or-nothing gate with complete fixture
+        run: npm test -- scripts/audit/verify-global-release.test.mjs
+
+  build:
+    needs: global-gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run lint && npm run typecheck && npm test && npm run build
+      - run: test -s dist/travel-map.html
+
+  production-release:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch'
+          && github.ref == 'refs/heads/main'
+          && inputs['publish-production'] }}
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production-boundaries
+    concurrency:
+      group: production-boundaries
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Run the complete sovereign package/report gate
+        id: release-gate
+        continue-on-error: true
+        run: >-
+          npm run audit:global --
+          --release "$OVERTURE_RELEASE"
+          --packages public/data/countries
+          --reports "data-audit/reports/$OVERTURE_RELEASE"
+      - name: Retain failed evidence as diagnostics only
+        if: ${{ steps.release-gate.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-global-audit-${{ env.OVERTURE_RELEASE }}-${{ github.run_id }}
+          path: data-audit/reports/${{ env.OVERTURE_RELEASE }}/
+          if-no-files-found: ignore
+          retention-days: 90
+      - name: Stop after a failed release gate
+        if: ${{ steps.release-gate.outcome == 'failure' }}
+        run: exit 1
+      - name: Refuse a partial production artifact
+        if: ${{ steps.release-gate.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          test -s public/data/countries/manifest.json
+          test -s public/data/countries/area-index.json
+          test -s public/data/countries/release-ready.json
+          test -s "data-audit/reports/$OVERTURE_RELEASE/summary.json"
+      - name: Upload atomic production boundary release
+        if: ${{ steps.release-gate.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: global-boundaries-${{ env.OVERTURE_RELEASE }}-${{ github.run_id }}
+          path: |
+            public/data/countries/*.topojson
+            public/data/countries/manifest.json
+            public/data/countries/area-index.json
+            public/data/countries/release-ready.json
+            data-audit/reports/${{ env.OVERTURE_RELEASE }}/
+          if-no-files-found: error
+          retention-days: 90
