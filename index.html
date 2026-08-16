@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#DDEBE7" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://nominatim.openstreetmap.org; worker-src 'self' blob:"
+    />
+    <meta name="description" content="点亮你到访过的全球城市，保存一张属于自己的旅行手账地图。" />
+    <title>我的世界足迹</title>
+  </head>
+  <body>
+    <main id="app" aria-busy="true">
+      <p class="loading-note">正在铺开世界地图……</p>
+    </main>
+    <noscript>这个旅行地图需要启用 JavaScript 才能记录足迹。</noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
