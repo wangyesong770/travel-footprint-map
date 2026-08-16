@@ -44,9 +44,11 @@ npm run build
 
 ## 部署与回滚
 
-推送到 `main` 后，GitHub Actions 会依次执行 lint、类型检查、单元测试、单文件构建，并把 `travel-map.html` 作为 Pages 的 `index.html` 部署。
+生产地址：<https://www.loomi-ai.cn/travel-footprint-map/>。
 
-回滚时，在 GitHub 上恢复上一个通过验证的提交并重新运行 `Deploy GitHub Pages` 工作流。用户数据在浏览器本地，不随静态站点版本部署或回滚；升级前建议导出 JSON 备份。
+推送到 `main` 后，GitHub Actions 会依次执行 lint、类型检查、单元测试、单文件构建，并上传经过验证的 `travel-map.html` 构建产物。本机采用不可变版本目录与原子 `current` 符号链接发布，具体 Nginx 规则、冒烟检查和回滚流程见 [deploy/README.md](deploy/README.md)。
+
+用户数据在浏览器本地，不随静态站点版本部署或回滚；升级前建议导出 JSON 备份。
 
 ## 已知限制
 
