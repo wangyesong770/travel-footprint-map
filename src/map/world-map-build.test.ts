@@ -28,7 +28,11 @@ describe('Natural Earth conversion', () => {
     expect(first.attribution).toContain('Natural Earth');
     expect(first.countries.map((country: { id: string }) => country.id)).toEqual(['AA', 'BB']);
     expect(first.countries[0].path).toMatch(/^M/);
-    expect(first.countries[1].label?.name).toBe('乙国');
+    expect(first.countries[1].label).toBeUndefined();
+
+    const labelled = convertWorldGeoJson(fixture, { precision: 2, labelIds: ['BB'] });
+    expect(labelled.countries[1].label?.name).toBe('乙国');
+    expect(labelled.countries.filter((country: { label?: unknown }) => country.label)).toHaveLength(1);
   });
 
   it('rejects malformed input instead of emitting unsafe path data', () => {

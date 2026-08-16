@@ -7,6 +7,10 @@ import { pathToFileURL } from 'node:url';
 const MAX_MERCATOR_LATITUDE = 85.05112878;
 const WIDTH = 1000;
 const HEIGHT = 500;
+const DEFAULT_LABEL_IDS = [
+  'AR', 'AU', 'BR', 'CA', 'CN', 'DE', 'EG', 'FR',
+  'GB', 'ID', 'IN', 'JP', 'MX', 'RU', 'US', 'ZA',
+];
 
 function project(longitude, latitude) {
   if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
@@ -95,9 +99,14 @@ export function convertWorldGeoJson(input, options = {}) {
   }
   const precision = options.precision ?? 2;
   const tolerance = options.tolerance ?? 0.2;
+  const requestedLabelIds = options.labelIds ?? DEFAULT_LABEL_IDS;
   if (!Number.isInteger(precision) || precision < 0 || precision > 6 || !Number.isFinite(tolerance) || tolerance < 0) {
     throw new Error('转换参数无效');
   }
+  if (!Array.isArray(requestedLabelIds) || requestedLabelIds.some((id) => typeof id !== 'string' || !/^[A-Z0-9-]{2,4}$/.test(id))) {
+    throw new Error('国家标签白名单无效');
+  }
+  const labelIds = new Set(requestedLabelIds);
 
   const countries = input.features.map((feature) => {
     if (!feature || feature.type !== 'Feature' || !feature.properties || typeof feature.properties !== 'object') {
@@ -110,9 +119,7 @@ export function convertWorldGeoJson(input, options = {}) {
     const labelLongitude = feature.properties.LABEL_X;
     const labelLatitude = feature.properties.LABEL_Y;
     const labelName = feature.properties.NAME_ZH ?? feature.properties.NAME;
-    const labelRank = feature.properties.LABELRANK;
-    const includeLabel = labelRank === undefined || (Number.isFinite(labelRank) && labelRank <= 4);
-    if (includeLabel && typeof labelName === 'string' && Number.isFinite(labelLongitude) && Number.isFinite(labelLatitude)) {
+    if (labelIds.has(id) && typeof labelName === 'string' && Number.isFinite(labelLongitude) && Number.isFinite(labelLatitude)) {
       const [x, y] = project(labelLongitude, labelLatitude);
       country.label = { name: labelName.slice(0, 80), x: Number(x.toFixed(precision)), y: Number(y.toFixed(precision)) };
     }
