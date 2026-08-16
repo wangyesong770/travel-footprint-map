@@ -25,7 +25,11 @@ async function temporaryDirectory() {
 
 async function localSnapshot(directory, rowCounts) {
   const snapshotDir = path.join(directory, 'snapshot');
-  await mkdir(path.join(snapshotDir, 'data'), { recursive: true });
+  await Promise.all([
+    mkdir(path.join(snapshotDir, 'data'), { recursive: true }),
+    mkdir(path.join(snapshotDir, 'division-metadata', 'sourceCountryCode=MO'), { recursive: true }),
+  ]);
+  await writeFile(path.join(snapshotDir, 'division-metadata', 'sourceCountryCode=MO', 'fixture.parquet'), 'fixture', 'utf8');
   await writeFile(path.join(snapshotDir, 'metadata.json'), `${JSON.stringify({
     schemaVersion: 1,
     release: '2026-06-17.0',
@@ -45,6 +49,25 @@ function response(body, status = 200) {
     async text() { return new TextDecoder().decode(bytes); },
   };
 }
+
+const sourceManifest = (overrides = {}) => ({
+  schemaVersion: 1,
+  release: '2026-06-17.0',
+  retrievedAt: '2026-08-16',
+  objects: [
+    {
+      key: 'theme=divisions/type=division/part.parquet', byteSize: 3, etag: 'division-etag',
+      url: 'https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/release/2026-06-17.0/theme%3Ddivisions/type%3Ddivision/part.parquet',
+      sha256: 'a'.repeat(64),
+    },
+    {
+      key: 'theme=divisions/type=division_area/part.parquet', byteSize: 4, etag: 'area-etag',
+      url: 'https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/release/2026-06-17.0/theme%3Ddivisions/type%3Ddivision_area/part.parquet',
+      sha256: 'b'.repeat(64),
+    },
+  ],
+  ...overrides,
+});
 
 describe('fixed-release Overture extractor', () => {
   it('provides a one-time release snapshot stage before country extraction', () => {
@@ -66,16 +89,14 @@ describe('fixed-release Overture extractor', () => {
     const directory = await temporaryDirectory();
     const snapshotDir = path.join(directory, 'snapshot');
     const sourceManifestPath = path.join(directory, 'source.json');
-    const sourceBytes = `${JSON.stringify({
-      schemaVersion: 1,
-      release: '2026-06-17.0',
-      objects: [{ key: 'theme=divisions/type=division/part.parquet', byteSize: 3, etag: 'x', sha256: 'a'.repeat(64) }],
-    }, null, 2)}\n`;
+    const sourceBytes = `${JSON.stringify(sourceManifest(), null, 2)}\n`;
     await writeFile(sourceManifestPath, sourceBytes, 'utf8');
     const calls = [];
     const runner = async (command, args, options) => {
       calls.push({ command, args, options });
       if (args[0] === '-version') return { exitCode: 0, stdout: 'DuckDB v1.5.5\n', stderr: '' };
+      await mkdir(path.join(options.expectedDivisionMetadataDirectory, 'sourceCountryCode=MO'), { recursive: true });
+      await writeFile(path.join(options.expectedDivisionMetadataDirectory, 'sourceCountryCode=MO', 'data.parquet'), 'parquet', 'utf8');
       await mkdir(path.join(options.expectedDataDirectory, 'sourceCountryCode=MO'), { recursive: true });
       await writeFile(path.join(options.expectedDataDirectory, 'sourceCountryCode=MO', 'data.parquet'), 'parquet', 'utf8');
       await writeFile(options.expectedRowCountsPath, '[{"sourceCountryCode":"MO","rowCount":2}]\n', 'utf8');
@@ -91,8 +112,15 @@ describe('fixed-release Overture extractor', () => {
     expect(sql).toContain("SET memory_limit = '2GB'");
     expect(sql).toMatch(/SET threads = \d+/);
     expect(sql).toContain('SET temp_directory =');
-    expect(sql).toContain('s3://overturemaps-us-west-2/release/2026-06-17.0/theme=divisions/type=division/*');
-    expect(sql).toContain('PARTITION_BY (sourceCountryCode)');
+    const divisionUrl = 's3://overturemaps-us-west-2/release/2026-06-17.0/theme=divisions/type=division/*';
+    const areaUrl = 's3://overturemaps-us-west-2/release/2026-06-17.0/theme=divisions/type=division_area/*';
+    expect(sql.split(divisionUrl)).toHaveLength(2);
+    expect(sql.split(areaUrl)).toHaveLength(2);
+    expect(sql.match(/PARTITION_BY \(sourceCountryCode\)/g)).toHaveLength(2);
+    expect(sql).not.toMatch(/INNER\s+JOIN/i);
+    expect(sql).not.toMatch(/CREATE\s+TEMP(?:ORARY)?\s+TABLE/i);
+    expect(sql).toContain(`TO '${calls[1].options.expectedDivisionMetadataDirectory}'`);
+    expect(sql).toContain(`FROM read_parquet('${path.join(calls[1].options.expectedDataDirectory, '**', '*.parquet')}'`);
     const metadata = JSON.parse(await readFile(path.join(snapshotDir, 'metadata.json'), 'utf8'));
     expect(metadata).toMatchObject({
       schemaVersion: 1,
@@ -107,17 +135,40 @@ describe('fixed-release Overture extractor', () => {
     expect((await readdir(directory)).some((name) => name.includes('.partial'))).toBe(false);
   });
 
+  it('rejects an incomplete or forged source manifest before starting DuckDB', async () => {
+    const directory = await temporaryDirectory();
+    const sourceManifestPath = path.join(directory, 'source.json');
+    const invalid = sourceManifest({
+      objects: [{
+        ...sourceManifest().objects[0],
+        url: 'https://attacker.example/release/2026-06-17.0/division.parquet',
+      }],
+    });
+    await writeFile(sourceManifestPath, `${JSON.stringify(invalid)}\n`, 'utf8');
+    let called = false;
+
+    await expect(overtureExtractor.createDivisionSnapshot({
+      release: '2026-06-17.0',
+      snapshotDir: path.join(directory, 'snapshot'),
+      sourceManifestPath,
+      runner: async () => { called = true; return { exitCode: 0, stdout: 'unexpected', stderr: '' }; },
+    })).rejects.toThrow(/source manifest/i);
+    expect(called).toBe(false);
+  });
+
   it('reuses one local snapshot for multiple countries and country SQL contains no remote URL', async () => {
     const directory = await temporaryDirectory();
     const snapshotDir = path.join(directory, 'snapshot');
     const sourceManifestPath = path.join(directory, 'source.json');
-    await writeFile(sourceManifestPath, `${JSON.stringify({ schemaVersion: 1, release: '2026-06-17.0', objects: [{}] })}\n`, 'utf8');
+    await writeFile(sourceManifestPath, `${JSON.stringify(sourceManifest())}\n`, 'utf8');
     const sqlCalls = [];
     let remoteSnapshotCalls = 0;
     const runner = async (_command, args, options) => {
       if (args[0] === '-version') return { exitCode: 0, stdout: 'DuckDB v1.5.5', stderr: '' };
       if (options.expectedDataDirectory) {
         remoteSnapshotCalls += 1;
+        await mkdir(path.join(options.expectedDivisionMetadataDirectory, 'sourceCountryCode=MO'), { recursive: true });
+        await writeFile(path.join(options.expectedDivisionMetadataDirectory, 'sourceCountryCode=MO', 'data.parquet'), 'fixture', 'utf8');
         await mkdir(path.join(options.expectedDataDirectory, 'sourceCountryCode=MO'), { recursive: true });
         await writeFile(path.join(options.expectedDataDirectory, 'sourceCountryCode=MO', 'data.parquet'), 'fixture', 'utf8');
         await writeFile(options.expectedRowCountsPath, '[{"sourceCountryCode":"MO","rowCount":1},{"sourceCountryCode":"US","rowCount":1}]\n', 'utf8');
@@ -143,7 +194,7 @@ describe('fixed-release Overture extractor', () => {
     const directory = await temporaryDirectory();
     const snapshotDir = path.join(directory, 'snapshot');
     const sourceManifestPath = path.join(directory, 'source.json');
-    await writeFile(sourceManifestPath, `${JSON.stringify({ schemaVersion: 1, release: '2026-06-17.0', objects: [{}] })}\n`, 'utf8');
+    await writeFile(sourceManifestPath, `${JSON.stringify(sourceManifest())}\n`, 'utf8');
     const runner = async (_command, args, options) => {
       if (args[0] === '-version') return { exitCode: 0, stdout: 'DuckDB v1.5.5', stderr: '' };
       await mkdir(options.expectedDataDirectory, { recursive: true });
@@ -216,8 +267,10 @@ writeFileSync(match[1], '{"type":"Feature"}\\n');
     const sql = calls[1].options.input;
     expect(sql).not.toMatch(/s3:|https?:/i);
     expect(sql).toContain(path.join(snapshotDir, 'data'));
+    expect(sql).toContain(path.join(snapshotDir, 'division-metadata'));
     expect(sql).toContain("SET VARIABLE source_country_codes = ['CN', 'HK', 'MO', 'TW']");
-    expect(sql).toMatch(/ORDER BY\s+divisionId/i);
+    expect(sql).toMatch(/true\s+AS\s+isLand/i);
+    expect(sql).toMatch(/ORDER BY\s+(?:area\.)?divisionId/i);
     expect(await readFile(result.outputPath, 'utf8')).toBe('{"type":"Feature"}\n');
     expect(result.duckdbVersion).toBe('DuckDB v1.4.0');
     expect((await readdir(outputDir)).some((name) => name.endsWith('.partial'))).toBe(false);

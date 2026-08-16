@@ -1,13 +1,15 @@
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, URL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 
 import { runProcess } from './lib/process-runner.mjs';
 
 const RELEASE_PATTERN = /^(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\.\d+$/;
 const COUNTRY_PATTERN = /^[A-Z]{2}$/;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+const SOURCE_OBJECT_KEYS = new Set(['key', 'byteSize', 'etag', 'url', 'sha256']);
 const SQL_PATH = path.resolve(process.cwd(), 'scripts/audit/sql/extract-country.sql');
 const SNAPSHOT_SQL_PATH = path.resolve(process.cwd(), 'scripts/audit/sql/snapshot-divisions.sql');
 
@@ -41,6 +43,7 @@ async function renderCountrySql({ sourceCountryCodes, snapshotDir, outputPath })
   return template
     .replace('__SOURCE_COUNTRY_CODES__', `[${sourceCountryCodes.map(sqlString).join(', ')}]`)
     .replace('__SNAPSHOT_DATA_GLOB__', escapedSqlPath(path.join(snapshotDir, 'data', '**', '*.parquet')))
+    .replace('__DIVISION_METADATA_PATH__', escapedSqlPath(path.join(snapshotDir, 'division-metadata', '**', '*.parquet')))
     .replace('__OUTPUT_PATH__', escapedSqlPath(outputPath));
 }
 
@@ -63,6 +66,47 @@ function validateFilesystemPath(value, label) {
   return value;
 }
 
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+}
+
+function validateSourceManifest(sourceManifest, release) {
+  const rootKeys = new Set(['schemaVersion', 'release', 'retrievedAt', 'objects']);
+  if (!isPlainObject(sourceManifest) || Object.keys(sourceManifest).some((key) => !rootKeys.has(key))
+    || sourceManifest.schemaVersion !== 1 || sourceManifest.release !== release
+    || typeof sourceManifest.retrievedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(sourceManifest.retrievedAt)
+    || !Array.isArray(sourceManifest.objects) || sourceManifest.objects.length === 0) {
+    throw new Error('source manifest does not match the fixed release');
+  }
+  const seen = new Set();
+  const types = new Set();
+  for (const object of sourceManifest.objects) {
+    if (!isPlainObject(object) || Object.keys(object).some((key) => !SOURCE_OBJECT_KEYS.has(key))
+      || typeof object.key !== 'string'
+      || !/^theme=divisions\/type=(division|division_area)\/[^/]+\.parquet$/.test(object.key)
+      || seen.has(object.key) || !Number.isSafeInteger(object.byteSize) || object.byteSize < 1
+      || typeof object.etag !== 'string' || object.etag.length === 0 || object.etag.length > 160
+      || typeof object.sha256 !== 'string' || !SHA256_PATTERN.test(object.sha256)) {
+      throw new Error('source manifest contains an invalid object');
+    }
+    let url;
+    try { url = new URL(object.url); }
+    catch { throw new Error('source manifest contains an invalid object URL'); }
+    const expectedPath = `/release/${release}/${object.key}`;
+    if (url.protocol !== 'https:' || url.hostname !== 'overturemaps-us-west-2.s3.us-west-2.amazonaws.com'
+      || url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== ''
+      || decodeURIComponent(url.pathname) !== expectedPath) {
+      throw new Error('source manifest contains an invalid object URL');
+    }
+    seen.add(object.key);
+    types.add(object.key.includes('/type=division_area/') ? 'division_area' : 'division');
+  }
+  if (!types.has('division') || !types.has('division_area')) {
+    throw new Error('source manifest is missing required division objects');
+  }
+}
+
 export async function createDivisionSnapshot({ release, snapshotDir, sourceManifestPath, runner = runProcess, duckdbPath = 'duckdb' }) {
   validateRelease(release);
   validateFilesystemPath(snapshotDir, 'snapshot directory');
@@ -76,31 +120,32 @@ export async function createDivisionSnapshot({ release, snapshotDir, sourceManif
   } catch (error) {
     throw new Error('source manifest is not valid JSON', { cause: error });
   }
-  if (sourceManifest?.release !== release || !Array.isArray(sourceManifest.objects) || sourceManifest.objects.length === 0) {
-    throw new Error('source manifest does not match the fixed release');
-  }
+  validateSourceManifest(sourceManifest, release);
   const sourceSnapshotSha256 = createHash('sha256').update(sourceBytes).digest('hex');
   const duckdbVersion = await duckDbVersion(runner, duckdbPath);
   const stagingDir = `${snapshotDir}.${randomUUID()}.partial`;
   const dataDir = path.join(stagingDir, 'data');
+  const divisionMetadataDir = path.join(stagingDir, 'division-metadata');
   const rowCountsPath = path.join(stagingDir, 'row-counts.json');
   const tempDir = path.join(stagingDir, 'spill');
   try {
     await mkdir(dataDir, { recursive: true });
-    await mkdir(tempDir, { recursive: true });
+    await Promise.all([mkdir(tempDir, { recursive: true }), mkdir(divisionMetadataDir, { recursive: true })]);
     const template = await readFile(SNAPSHOT_SQL_PATH, 'utf8');
     const baseUrl = `s3://overturemaps-us-west-2/release/${release}/theme=divisions`;
     const sql = template
       .replace('__TEMP_DIRECTORY__', escapedSqlPath(tempDir))
       .replace('__DIVISION_URL__', `${baseUrl}/type=division/*`)
       .replace('__DIVISION_AREA_URL__', `${baseUrl}/type=division_area/*`)
-      .replace('__SNAPSHOT_DATA_DIRECTORY__', escapedSqlPath(dataDir))
+      .replaceAll('__DIVISION_METADATA_DIRECTORY__', escapedSqlPath(divisionMetadataDir))
+      .replaceAll('__SNAPSHOT_DATA_DIRECTORY__', escapedSqlPath(dataDir))
       .replace('__ROW_COUNTS_PATH__', escapedSqlPath(rowCountsPath));
     const result = await runner(duckdbPath, [':memory:'], {
       shell: false,
       input: sql,
       maxOutputBytes: 64 * 1024,
       expectedDataDirectory: dataDir,
+      expectedDivisionMetadataDirectory: divisionMetadataDir,
       expectedRowCountsPath: rowCountsPath,
     });
     if (result.exitCode !== 0) {
@@ -109,6 +154,10 @@ export async function createDivisionSnapshot({ release, snapshotDir, sourceManif
     }
     const dataEntries = await readdir(dataDir);
     if (dataEntries.length === 0) throw new Error('DuckDB snapshot produced no partition data');
+    const divisionMetadataEntries = await readdir(divisionMetadataDir);
+    if (divisionMetadataEntries.length === 0) {
+      throw new Error('DuckDB snapshot produced no division metadata');
+    }
     const rawCounts = JSON.parse(await readFile(rowCountsPath, 'utf8'));
     if (!Array.isArray(rawCounts) || rawCounts.length === 0) throw new Error('DuckDB snapshot produced no row counts');
     const rowCounts = {};
