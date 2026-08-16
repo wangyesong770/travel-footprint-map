@@ -14,23 +14,14 @@ import { normalizeFeatureCollection, normalizeMetadata } from './lib/boundary-no
 
 const MAX_INPUT_BYTES = 256 * 1024 * 1024;
 const QUANTIZATION = 100_000;
-const COUNTRY_CONFIG = Object.freeze({
-  CN: Object.freeze({
-    sovereignCode: 'CN', sourceCountryCodes: ['CN'], productLevel: 'prefecture',
-    overtureSelector: { subtypes: ['prefecture'], adminLevels: [2], localTypeRules: [] },
-    allowlist: [], denylist: [], administrativeScheme: '地级行政区',
-    simplificationTolerance: 1e-10, nameZh: '中国', nameLocal: 'China', aliases: ['中华人民共和国', 'PRC'],
-  }),
-  US: Object.freeze({
-    sovereignCode: 'US', sourceCountryCodes: ['US'], productLevel: 'county-equivalent',
-    overtureSelector: { subtypes: ['county', 'independent-city'], adminLevels: [2], localTypeRules: [] },
-    allowlist: [], denylist: [], administrativeScheme: '县及独立市等同行政区',
-    simplificationTolerance: 1e-10, nameZh: '美国', nameLocal: 'United States', aliases: ['USA', 'US'],
-  }),
-});
-
-export async function buildCountryBoundaries({ inputDir, outputDir, indexModulePath, auditReports }) {
+export async function buildCountryBoundaries({ inputDir, outputDir, indexModulePath, auditReports, countryConfigs }) {
   if (typeof inputDir !== 'string' || typeof outputDir !== 'string') throw new Error('inputDir and outputDir are required');
+  const reviewedConfigs = validateCountryConfigs(countryConfigs);
+  const statuses = Object.values(reviewedConfigs).map(({ status }) => status);
+  if (auditReports === undefined && statuses.includes('verified')) throw new Error('verified build requires audit reports');
+  if (auditReports !== undefined && statuses.some((status) => status !== 'verified')) {
+    throw new Error('audit reports require a verified build');
+  }
   const entries = (await readdir(inputDir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name, 'en'));
   if (entries.length === 0) throw new Error('input directory contains no country files');
   const manifest = {};
@@ -43,16 +34,24 @@ export async function buildCountryBoundaries({ inputDir, outputDir, indexModuleP
       throw new Error(`invalid country file name: ${entry.name}`);
     }
     const countryCode = entry.name.slice(0, 2);
-    const config = COUNTRY_CONFIG[countryCode];
+    const config = reviewedConfigs[countryCode];
     if (!config) throw new Error(`country scheme is not configured: ${countryCode}`);
     const inputPath = path.join(inputDir, entry.name);
     const fileStat = await stat(inputPath);
     if (fileStat.size === 0 || fileStat.size > MAX_INPUT_BYTES) throw new Error(`input size limit exceeded: ${entry.name}`);
     const raw = await readFile(inputPath, 'utf8');
     const parsed = parseJson(raw, entry.name);
-    const selected = selectCountryFeatures(toSelectorRows(parsed, countryCode), config);
+    const selectorRows = toSelectorRows(parsed);
+    if (selectorRows.some(({ sovereignCountryCode }) => sovereignCountryCode !== countryCode)) {
+      throw new Error(`input sovereign country mismatch: ${countryCode}`);
+    }
+    if (selectorRows.some(({ sourceCountryCode }) => !config.sourceCountryCodes.includes(sourceCountryCode))) {
+      throw new Error(`input source ownership mismatch: ${countryCode}`);
+    }
+    const selected = selectCountryFeatures(selectorRows, config);
     const normalized = normalizeFeatureCollection(toSelectedFeatureCollection(parsed, selected), countryCode, { acceptedLevels: [config.productLevel] });
     const metadata = normalizeMetadata(parsed.metadata);
+    if (metadata.boundaryVersion !== config.release) throw new Error(`boundary release mismatch: ${countryCode}`);
     const packageObject = createTopologyPackage(countryCode, config, metadata, normalized);
     const packageBytes = Buffer.from(`${canonicalJson(packageObject)}\n`, 'utf8');
     const checksum = createHash('sha256').update(packageBytes).digest('hex');
@@ -121,6 +120,144 @@ export async function buildCountryBoundaries({ inputDir, outputDir, indexModuleP
     await atomicWriteText(indexModulePath, indexSource);
   }
   return manifest;
+}
+
+function validateCountryConfigs(input) {
+  if (!isPlainObject(input) || Object.keys(input).length === 0) throw new Error('countryConfigs is required');
+  const result = Object.create(null);
+  for (const [countryCode, candidate] of Object.entries(input)) {
+    if (!/^[A-Z]{2}$/.test(countryCode) || !isPlainObject(candidate) || candidate.sovereignCode !== countryCode) {
+      throw new Error(`invalid country configuration: ${countryCode}`);
+    }
+    const allowedKeys = new Set([
+      'sovereignCode', 'sourceCountryCodes', 'productLevel', 'selectorVersion', 'release', 'status',
+      'overtureSelector', 'allowlist', 'denylist', 'administrativeScheme', 'simplificationTolerance',
+      'nameZh', 'nameLocal', 'aliases',
+    ]);
+    if (Object.keys(candidate).some((key) => !allowedKeys.has(key))) throw new Error(`unknown country configuration key: ${countryCode}`);
+    if (!Array.isArray(candidate.sourceCountryCodes) || candidate.sourceCountryCodes.length === 0
+      || new Set(candidate.sourceCountryCodes).size !== candidate.sourceCountryCodes.length
+      || candidate.sourceCountryCodes.some((code) => typeof code !== 'string' || !/^[A-Z]{2}$/.test(code))
+      || !candidate.sourceCountryCodes.includes(countryCode)) {
+      throw new Error(`invalid source ownership: ${countryCode}`);
+    }
+    if (!boundedConfigText(candidate.productLevel) || !Number.isSafeInteger(candidate.selectorVersion) || candidate.selectorVersion < 1
+      || typeof candidate.release !== 'string' || !/^\d{4}-\d{2}-\d{2}\.\d+$/.test(candidate.release)
+      || (candidate.status !== 'draft' && candidate.status !== 'verified')
+      || !boundedConfigText(candidate.nameZh) || !boundedConfigText(candidate.nameLocal)
+      || !boundedConfigText(candidate.administrativeScheme ?? candidate.productLevel)
+      || !Number.isFinite(candidate.simplificationTolerance ?? 1e-10)
+      || (candidate.simplificationTolerance ?? 1e-10) < 0
+      || !Array.isArray(candidate.aliases ?? []) || candidate.aliases.some((alias) => !boundedConfigText(alias))) {
+      throw new Error(`invalid reviewed country configuration: ${countryCode}`);
+    }
+    // The selector performs the full predicate/allow/deny validation. Calling it with no rows
+    // validates the reviewed predicate without inferring an administrative level.
+    selectCountryFeatures([], candidate);
+    result[countryCode] = Object.freeze({
+      ...candidate,
+      administrativeScheme: candidate.administrativeScheme ?? candidate.productLevel,
+      simplificationTolerance: candidate.simplificationTolerance ?? 1e-10,
+      aliases: Object.freeze([...(candidate.aliases ?? [])]),
+    });
+  }
+  return Object.freeze(result);
+}
+
+export function createCountryBuildConfigs({ registry, selectorsByCountry, countryCodes }) {
+  assertExactKeys(registry, ['release', 'schemaVersion', 'nonSovereignExclusions', 'countries'], 'registry');
+  if (!Array.isArray(registry.countries) || !Array.isArray(registry.nonSovereignExclusions)
+    || typeof registry.release !== 'string' || !/^\d{4}-\d{2}-\d{2}\.\d+$/.test(registry.release)
+    || !boundedConfigText(registry.schemaVersion) || !Array.isArray(countryCodes)
+    || !isPlainObject(selectorsByCountry)) {
+    throw new Error('invalid registry');
+  }
+  const registryByCountry = new Map();
+  for (const entry of registry.countries) {
+    assertExactKeys(entry, [
+      'sovereignCode', 'sourceCountryCodes', 'nameZh', 'nameLocal', 'auditRegion', 'worldGeometryIds',
+      'productLevel', 'selectorVersion', 'overtureSelector', 'allowlist', 'denylist', 'expectedCount',
+      'officialReferences', 'perspective', 'auditedAt', 'status',
+    ], 'registry country');
+    if (typeof entry.sovereignCode !== 'string' || registryByCountry.has(entry.sovereignCode)) {
+      throw new Error('invalid registry country');
+    }
+    registryByCountry.set(entry.sovereignCode, entry);
+  }
+  const result = {};
+  for (const countryCode of countryCodes) {
+    if (typeof countryCode !== 'string' || !/^[A-Z]{2}$/.test(countryCode) || result[countryCode] !== undefined) {
+      throw new Error('invalid requested country');
+    }
+    const entry = registryByCountry.get(countryCode);
+    const selector = selectorsByCountry[countryCode];
+    if (entry === undefined || !isPlainObject(selector)) throw new Error(`country scheme is not configured: ${countryCode}`);
+    assertExactKeys(selector, [
+      'schemaVersion', 'release', 'sovereignCode', 'status', 'productLevel', 'overtureSelector',
+      'expectedCount', 'officialReferences', 'allowlist', 'denylist', 'sampleApplicability', 'samples',
+    ], 'selector');
+    if (selector.schemaVersion !== 1 || selector.release !== registry.release || selector.sovereignCode !== countryCode
+      || selector.status !== 'draft' || selector.productLevel !== entry.productLevel
+      || canonicalJson(selector.overtureSelector) !== canonicalJson(entry.overtureSelector)
+      || canonicalJson(selector.allowlist) !== canonicalJson(entry.allowlist)
+      || canonicalJson(selector.denylist) !== canonicalJson(entry.denylist)) {
+      throw new Error(`registry selector mismatch: ${countryCode}`);
+    }
+    result[countryCode] = {
+      sovereignCode: entry.sovereignCode,
+      sourceCountryCodes: entry.sourceCountryCodes,
+      productLevel: entry.productLevel,
+      selectorVersion: entry.selectorVersion,
+      release: registry.release,
+      status: entry.status,
+      overtureSelector: selector.overtureSelector,
+      allowlist: selector.allowlist,
+      denylist: selector.denylist,
+      administrativeScheme: entry.productLevel,
+      simplificationTolerance: 1e-10,
+      nameZh: entry.nameZh,
+      nameLocal: entry.nameLocal,
+      aliases: [],
+    };
+  }
+  return validateCountryConfigs(result);
+}
+
+function assertExactKeys(value, allowed, label) {
+  if (!isPlainObject(value)) throw new Error(`invalid ${label}`);
+  const whitelist = new Set(allowed);
+  const unknown = Object.keys(value).find((key) => !whitelist.has(key));
+  if (unknown !== undefined) throw new Error(`unknown ${label} key: ${unknown}`);
+}
+
+async function loadCliCountryConfigs(inputDir) {
+  const entries = await readdir(inputDir, { withFileTypes: true });
+  const countryCodes = entries.filter((entry) => entry.isFile() && /^[A-Z]{2}\.geojson$/.test(entry.name))
+    .map(({ name }) => name.slice(0, 2)).sort((left, right) => left.localeCompare(right, 'en'));
+  const auditRoot = path.resolve('data-audit');
+  const registry = parseJson(await readFile(path.join(auditRoot, 'sovereign-registry.json'), 'utf8'), 'sovereign-registry.json');
+  const selectorsByCountry = {};
+  for (const countryCode of countryCodes) {
+    selectorsByCountry[countryCode] = parseJson(
+      await readFile(path.join(auditRoot, 'selectors', `${countryCode}.json`), 'utf8'),
+      `${countryCode} selector`,
+    );
+  }
+  return createCountryBuildConfigs({ registry, selectorsByCountry, countryCodes });
+}
+
+function boundedConfigText(value) {
+  return typeof value === 'string' && value.length > 0 && value.trim() === value && [...value].length <= 160
+    && ![...value].some((character) => {
+      const code = character.codePointAt(0);
+      return code !== undefined && (code <= 0x1f || (code >= 0x7f && code <= 0x9f));
+    });
+}
+
+function isPlainObject(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 async function bindManifestToFinalPackageBytes(outputDir, manifest) {
@@ -274,12 +411,13 @@ async function atomicWriteText(outputPath, contents) {
   }
 }
 
-function toSelectorRows(collection, countryCode) {
+function toSelectorRows(collection) {
   if (!collection || !Array.isArray(collection.features)) return [];
   return collection.features.map((feature) => ({
     divisionId: feature?.properties?.divisionId ?? feature?.id,
     divisionAreaId: feature?.id,
-    sourceCountryCode: feature?.properties?.sourceCountryCode ?? feature?.properties?.country ?? countryCode,
+    sovereignCountryCode: feature?.properties?.country,
+    sourceCountryCode: feature?.properties?.sourceCountryCode ?? feature?.properties?.country,
     subtype: feature?.properties?.subtype,
     adminLevel: feature?.properties?.adminLevel ?? feature?.properties?.admin_level,
     localType: feature?.properties?.localType ?? feature?.properties?.local_type,
@@ -378,7 +516,10 @@ function parseCliArguments(argv) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  buildCountryBoundaries(parseCliArguments(process.argv.slice(2))).catch((error) => {
+  const options = parseCliArguments(process.argv.slice(2));
+  loadCliCountryConfigs(options.inputDir)
+    .then((countryConfigs) => buildCountryBoundaries({ ...options, countryConfigs }))
+    .catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : 'boundary build failed'}\n`);
     process.exitCode = 1;
   });

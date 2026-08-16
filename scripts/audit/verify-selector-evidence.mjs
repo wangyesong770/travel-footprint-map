@@ -17,7 +17,11 @@ const JSON_LIMITS = {
   resultIds: 128 * 1024 * 1024,
 };
 
-export function verifySelectorEvidence(input) {
+export function verifySelectorEvidence(input, options = {}) {
+  const requiredStatus = options.requiredStatus ?? 'draft';
+  if (requiredStatus !== 'draft' && requiredStatus !== 'verified') {
+    throw new TypeError('requiredStatus must be draft or verified');
+  }
   const failures = [];
   validateKnownFields(input, ['selector', 'exceptions', 'finalDivisionIds'], 'input', failures);
   const selector = object(input?.selector);
@@ -31,7 +35,7 @@ export function verifySelectorEvidence(input) {
   );
   const finalIds = new Set(finalDivisionIds);
 
-  validateDocumentIdentity(selector, exceptionsDocument, failures);
+  validateDocumentIdentity(selector, exceptionsDocument, requiredStatus, failures);
   validatePredicate(selector?.overtureSelector, failures);
 
   const references = validateReferences(selector?.officialReferences, failures);
@@ -43,6 +47,12 @@ export function verifySelectorEvidence(input) {
   validateExpectedCount(selector?.expectedCount, finalDivisionIds.length, referenceIds, failures);
   const samples = validateSamples(selector?.samples, selector?.sampleApplicability, finalIds, referenceIds, failures);
   const exceptions = validateExceptions(exceptionsDocument?.exceptions, allowlist, denylist, referenceIds, failures);
+  const overlapExceptions = validateOverlapExceptions(
+    exceptionsDocument?.overlapExceptions,
+    finalIds,
+    referenceIds,
+    failures,
+  );
 
   failures.sort(compareFailures);
   return {
@@ -54,12 +64,13 @@ export function verifySelectorEvidence(input) {
       referenceCount: references.length,
       sampleCount: samples.length,
       exceptionCount: exceptions.length,
+      overlapExceptionCount: overlapExceptions.length,
     },
     failures,
   };
 }
 
-function validateDocumentIdentity(selector, exceptions, failures) {
+function validateDocumentIdentity(selector, exceptions, requiredStatus, failures) {
   if (selector === undefined || exceptions === undefined) {
     addFailure(failures, 'DOCUMENT_INVALID');
     return;
@@ -69,7 +80,7 @@ function validateDocumentIdentity(selector, exceptions, failures) {
     || selector.sovereignCode !== exceptions.sovereignCode
     || !validRelease(selector.release)
     || selector.release !== exceptions.release
-    || selector.status !== 'draft' || exceptions.status !== 'draft'
+    || selector.status !== requiredStatus || exceptions.status !== requiredStatus
     || !plainText(selector.productLevel)) addFailure(failures, 'DOCUMENT_METADATA_INVALID');
 }
 
@@ -231,6 +242,34 @@ function validateExceptions(rawExceptions, allowlist, denylist, referenceIds, fa
   return exceptions;
 }
 
+function validateOverlapExceptions(rawExceptions, finalIds, referenceIds, failures) {
+  if (!Array.isArray(rawExceptions) || rawExceptions.length > MAX_EVIDENCE_ITEMS) {
+    addFailure(failures, 'OVERLAP_EXCEPTIONS_INVALID');
+    return [];
+  }
+  const result = [];
+  const ids = new Set();
+  const pairs = new Set();
+  for (const raw of rawExceptions) {
+    const exception = object(raw);
+    const divisionIds = exception?.divisionIds;
+    if (exception === undefined || !auditId(exception.id) || ids.has(exception.id)
+      || exception.kind !== 'overlap' || !Array.isArray(divisionIds) || divisionIds.length !== 2
+      || divisionIds.some((divisionId) => !auditId(divisionId) || !finalIds.has(divisionId))
+      || divisionIds[0] === divisionIds[1] || !plainText(exception.reason)) {
+      addFailure(failures, 'OVERLAP_EXCEPTION_INVALID', exception?.id);
+      continue;
+    }
+    ids.add(exception.id);
+    const pair = [...divisionIds].sort().join('\u0000');
+    if (pairs.has(pair)) addFailure(failures, 'OVERLAP_EXCEPTION_DUPLICATE', exception.id);
+    pairs.add(pair);
+    validateReferenceIds(exception.referenceIds, referenceIds, failures, exception.id);
+    result.push(exception);
+  }
+  return result;
+}
+
 function validateReferenceIds(rawIds, knownIds, failures, owner) {
   const ids = stringArray(rawIds);
   if (!Array.isArray(rawIds) || ids.length === 0 || ids.length !== rawIds.length) {
@@ -315,12 +354,25 @@ function validateEvidenceFields(selector, exceptions, failures) {
       failures,
     );
   }
-  validateKnownFields(exceptions, ['schemaVersion', 'release', 'sovereignCode', 'status', 'exceptions'], 'exceptions', failures);
+  validateKnownFields(
+    exceptions,
+    ['schemaVersion', 'release', 'sovereignCode', 'status', 'exceptions', 'overlapExceptions'],
+    'exceptions',
+    failures,
+  );
   for (const [index, exception] of arrayEntries(exceptions?.exceptions)) {
     validateKnownFields(
       exception,
       ['divisionId', 'action', 'institutionalCategory', 'reason', 'referenceIds'],
       `exceptions.exceptions[${index}]`,
+      failures,
+    );
+  }
+  for (const [index, exception] of arrayEntries(exceptions?.overlapExceptions)) {
+    validateKnownFields(
+      exception,
+      ['id', 'kind', 'divisionIds', 'reason', 'referenceIds'],
+      `exceptions.overlapExceptions[${index}]`,
       failures,
     );
   }

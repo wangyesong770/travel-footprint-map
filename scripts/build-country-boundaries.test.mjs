@@ -6,13 +6,37 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'vitest';
 
-import { buildCountryBoundaries, promoteDirectorySet } from './build-country-boundaries.mjs';
+import {
+  buildCountryBoundaries as buildCountryBoundariesImpl,
+  createCountryBuildConfigs,
+  promoteDirectorySet,
+} from './build-country-boundaries.mjs';
 import { normalizeFeatureCollection } from './lib/boundary-normalize.mjs';
 
 const fixtures = path.resolve('scripts/fixtures/boundaries');
 
-const fixture = async (countryCode = 'CN') =>
-  JSON.parse(await readFile(path.join(fixtures, `${countryCode}.geojson`), 'utf8'));
+const fixture = async (countryCode = 'CN') => {
+  const value = JSON.parse(await readFile(path.join(fixtures, `${countryCode}.geojson`), 'utf8'));
+  value.metadata.boundaryVersion = '2026-08-16.0';
+  return value;
+};
+
+const buildCountryBoundaries = (options) => buildCountryBoundariesImpl({
+  countryConfigs: {
+    CN: reviewedCountryConfig({
+      release: options.auditReports?.sourceRelease ?? '2026-08-16.0',
+      status: options.auditReports === undefined ? 'draft' : 'verified',
+    }),
+    US: reviewedCountryConfig({
+      sovereignCode: 'US', sourceCountryCodes: ['US'], productLevel: 'county-equivalent',
+      release: options.auditReports?.sourceRelease ?? '2026-08-16.0', nameZh: '美国', nameLocal: 'United States', aliases: ['USA', 'US'],
+      status: options.auditReports === undefined ? 'draft' : 'verified',
+      administrativeScheme: '县及独立市等同行政区',
+      overtureSelector: { subtypes: ['county', 'independent-city'], adminLevels: [2], localTypeRules: [] },
+    }),
+  },
+  ...options,
+});
 
 test('normalizes Overture identities, whitelist properties, winding, and stable ordering', async () => {
   const normalized = normalizeFeatureCollection(await fixture(), 'CN');
@@ -72,11 +96,15 @@ test('rejects unsafe country paths, invalid coordinates, unclosed rings, and uns
 });
 
 test('emits consumable TopoJSON and byte-identical builds with matching SHA-256 metadata', async () => {
+  const inputDir = await mkdtemp(path.join(tmpdir(), 'boundaries-input-'));
   const firstDir = await mkdtemp(path.join(tmpdir(), 'boundaries-a-'));
   const secondDir = await mkdtemp(path.join(tmpdir(), 'boundaries-b-'));
   try {
-    const firstManifest = await buildCountryBoundaries({ inputDir: fixtures, outputDir: firstDir });
-    const secondManifest = await buildCountryBoundaries({ inputDir: fixtures, outputDir: secondDir });
+    await Promise.all(['CN', 'US'].map(async (countryCode) => {
+      await writeFile(path.join(inputDir, `${countryCode}.geojson`), JSON.stringify(await fixture(countryCode)));
+    }));
+    const firstManifest = await buildCountryBoundaries({ inputDir, outputDir: firstDir });
+    const secondManifest = await buildCountryBoundaries({ inputDir, outputDir: secondDir });
     assert.equal(firstManifest.CN.checksum, secondManifest.CN.checksum);
     assert.equal(firstManifest.CN.featureCount, 2);
     assert.match(firstManifest.CN.attribution, /Overture Maps Foundation/);
@@ -96,7 +124,7 @@ test('emits consumable TopoJSON and byte-identical builds with matching SHA-256 
     assert.equal(packageBytes.byteLength, firstManifest.CN.byteSize);
     assert.equal(createHash('sha256').update(packageBytes).digest('hex'), firstManifest.CN.checksum);
   } finally {
-    await Promise.all([rm(firstDir, { recursive: true, force: true }), rm(secondDir, { recursive: true, force: true })]);
+    await Promise.all([rm(inputDir, { recursive: true, force: true }), rm(firstDir, { recursive: true, force: true }), rm(secondDir, { recursive: true, force: true })]);
   }
 });
 
@@ -208,6 +236,207 @@ test('builder accepts extractor camelCase properties while preserving the divisi
   } finally {
     await Promise.all([rm(inputDir, { recursive: true, force: true }), rm(outputDir, { recursive: true, force: true })]);
   }
+});
+
+test('builds a third registered country from an explicitly bound reviewed selector configuration', async () => {
+  const inputDir = await mkdtemp(path.join(tmpdir(), 'ad-boundary-input-'));
+  const outputDir = await mkdtemp(path.join(tmpdir(), 'ad-boundary-output-'));
+  try {
+    const input = await fixture();
+    input.metadata.boundaryVersion = '2026-06-17.0';
+    input.features = input.features.map((feature, index) => ({
+      ...feature,
+      id: `ad-area-${index}`,
+      properties: {
+        ...feature.properties,
+        divisionId: `ad-parish-${index}`,
+        sourceCountryCode: 'AD',
+        country: 'AD',
+        subtype: 'parish',
+        adminLevel: 1,
+      },
+    }));
+    await writeFile(path.join(inputDir, 'AD.geojson'), JSON.stringify(input));
+
+    const manifest = await buildCountryBoundaries({
+      inputDir,
+      outputDir,
+      countryConfigs: {
+        AD: reviewedCountryConfig({
+          sovereignCode: 'AD',
+          sourceCountryCodes: ['AD'],
+          productLevel: 'parish',
+          selectorVersion: 7,
+          nameZh: '安道尔',
+          nameLocal: 'Andorra',
+          administrativeScheme: '教区',
+          overtureSelector: { subtypes: ['parish'], adminLevels: [1], localTypeRules: [] },
+        }),
+      },
+    });
+
+    assert.equal(manifest.AD.countryCode, 'AD');
+    assert.equal(manifest.AD.boundaryVersion, '2026-06-17.0');
+    assert.equal(manifest.AD.administrativeScheme, '教区');
+    assert.equal(manifest.AD.featureCount, 2);
+    const topology = JSON.parse(await readFile(path.join(outputDir, 'AD.topojson'), 'utf8'));
+    assert.deepEqual(topology.objects.areas.geometries.map(({ properties }) => properties.areaId), [
+      'AD:overture:ad-parish-0',
+      'AD:overture:ad-parish-1',
+    ]);
+  } finally {
+    await Promise.all([rm(inputDir, { recursive: true, force: true }), rm(outputDir, { recursive: true, force: true })]);
+  }
+});
+
+test('rejects an unknown country and every country/config identity mismatch before writing output', async () => {
+  const inputDir = await mkdtemp(path.join(tmpdir(), 'strict-country-input-'));
+  const outputDir = path.join(inputDir, 'output');
+  try {
+    const input = await fixture();
+    input.features = input.features.map((feature) => ({
+      ...feature,
+      properties: { ...feature.properties, sourceCountryCode: 'AD', country: 'AD', subtype: 'parish' },
+    }));
+    await writeFile(path.join(inputDir, 'AD.geojson'), JSON.stringify(input));
+
+    await assert.rejects(
+      buildCountryBoundaries({ inputDir, outputDir, countryConfigs: {} }),
+      /countryConfigs is required/i,
+    );
+    await assert.rejects(
+      buildCountryBoundaries({
+        inputDir,
+        outputDir,
+        countryConfigs: { AD: reviewedCountryConfig({ sovereignCode: 'AE', sourceCountryCodes: ['AD'] }) },
+      }),
+      /invalid country configuration/i,
+    );
+    await assert.rejects(
+      buildCountryBoundaries({
+        inputDir,
+        outputDir,
+        countryConfigs: { AD: reviewedCountryConfig({ sovereignCode: 'AD', sourceCountryCodes: ['AE'], productLevel: 'parish' }) },
+      }),
+      /source ownership|contains no country files/i,
+    );
+    await assert.rejects(
+      buildCountryBoundaries({
+        inputDir,
+        outputDir,
+        countryConfigs: {
+          AD: reviewedCountryConfig({
+            sovereignCode: 'AD', sourceCountryCodes: ['AD'], productLevel: 'parish', release: '2026-06-17.0',
+            overtureSelector: { subtypes: ['parish'], adminLevels: [], localTypeRules: [] },
+          }),
+        },
+      }),
+      /release mismatch/i,
+    );
+    await assert.rejects(readFile(path.join(outputDir, 'manifest.json')), /ENOENT/);
+  } finally {
+    await rm(inputDir, { recursive: true, force: true });
+  }
+});
+
+test('accepts reviewed CN territory source ownership but rejects an input source outside the bound owner set', async () => {
+  const inputDir = await mkdtemp(path.join(tmpdir(), 'cn-owner-input-'));
+  const outputDir = await mkdtemp(path.join(tmpdir(), 'cn-owner-output-'));
+  try {
+    const input = await fixture();
+    input.features[0].properties.sourceCountryCode = 'HK';
+    await writeFile(path.join(inputDir, 'CN.geojson'), JSON.stringify(input));
+    const cnConfig = reviewedCountryConfig({ sourceCountryCodes: ['CN', 'HK', 'MO', 'TW'], release: '2026-08-16.0' });
+    const manifest = await buildCountryBoundaries({ inputDir, outputDir, countryConfigs: { CN: cnConfig } });
+    assert.equal(manifest.CN.featureCount, 2);
+
+    input.features[0].properties.sourceCountryCode = 'US';
+    await writeFile(path.join(inputDir, 'CN.geojson'), JSON.stringify(input));
+    await assert.rejects(
+      buildCountryBoundaries({ inputDir, outputDir, countryConfigs: { CN: cnConfig } }),
+      /input (source ownership|sovereign country) mismatch/i,
+    );
+
+    input.features[0].properties.sourceCountryCode = 'HK';
+    input.features[0].properties.country = 'US';
+    await writeFile(path.join(inputDir, 'CN.geojson'), JSON.stringify(input));
+    await assert.rejects(
+      buildCountryBoundaries({ inputDir, outputDir, countryConfigs: { CN: cnConfig } }),
+      /input sovereign country mismatch/i,
+    );
+
+    delete input.features[0].properties.sourceCountryCode;
+    delete input.features[0].properties.country;
+    await writeFile(path.join(inputDir, 'CN.geojson'), JSON.stringify(input));
+    await assert.rejects(
+      buildCountryBoundaries({ inputDir, outputDir, countryConfigs: { CN: cnConfig } }),
+      /input (source ownership|sovereign country) mismatch/i,
+    );
+  } finally {
+    await Promise.all([rm(inputDir, { recursive: true, force: true }), rm(outputDir, { recursive: true, force: true })]);
+  }
+});
+
+test('allows a draft staging candidate but requires bound verified evidence for a verified build', async () => {
+  const inputDir = await mkdtemp(path.join(tmpdir(), 'candidate-input-'));
+  const draftDir = await mkdtemp(path.join(tmpdir(), 'candidate-draft-'));
+  const verifiedDir = await mkdtemp(path.join(tmpdir(), 'candidate-verified-'));
+  try {
+    await writeFile(path.join(inputDir, 'CN.geojson'), JSON.stringify(await fixture()));
+    const draft = reviewedCountryConfig({ release: '2026-08-16.0', status: 'draft' });
+    const manifest = await buildCountryBoundaries({ inputDir, outputDir: draftDir, countryConfigs: { CN: draft } });
+    assert.equal(manifest.CN.featureCount, 2);
+    assert.equal((await readdir(draftDir)).includes('CN.topojson'), true);
+
+    await assert.rejects(
+      buildCountryBoundaries({
+        inputDir,
+        outputDir: verifiedDir,
+        countryConfigs: { CN: { ...draft, status: 'verified' } },
+      }),
+      /verified build requires audit reports/i,
+    );
+    await assert.rejects(readFile(path.join(verifiedDir, 'manifest.json')), /ENOENT/);
+  } finally {
+    await Promise.all([
+      rm(inputDir, { recursive: true, force: true }),
+      rm(draftDir, { recursive: true, force: true }),
+      rm(verifiedDir, { recursive: true, force: true }),
+    ]);
+  }
+});
+
+test('derives CLI build configs only from an identity-matched strict registry and selector document', () => {
+  const registryCountry = {
+    sovereignCode: 'AD', sourceCountryCodes: ['AD'], nameZh: '安道尔', nameLocal: 'Andorra',
+    productLevel: 'parish', selectorVersion: 7, status: 'draft',
+    overtureSelector: { subtypes: ['parish'], adminLevels: [1], localTypeRules: [] },
+    allowlist: [], denylist: [],
+  };
+  const selector = {
+    schemaVersion: 1, release: '2026-06-17.0', sovereignCode: 'AD', status: 'draft', productLevel: 'parish',
+    overtureSelector: { subtypes: ['parish'], adminLevels: [1], localTypeRules: [] },
+    allowlist: [], denylist: [], expectedCount: {}, officialReferences: [], sampleApplicability: {}, samples: [],
+  };
+  const configs = createCountryBuildConfigs({
+    registry: { release: '2026-06-17.0', schemaVersion: 'v1.17.0', nonSovereignExclusions: [], countries: [registryCountry] },
+    selectorsByCountry: { AD: selector },
+    countryCodes: ['AD'],
+  });
+  assert.equal(configs.AD.productLevel, 'parish');
+  assert.equal(configs.AD.administrativeScheme, 'parish');
+  assert.equal(configs.AD.selectorVersion, 7);
+
+  assert.throws(() => createCountryBuildConfigs({
+    registry: { release: '2026-06-17.0', schemaVersion: 'v1.17.0', nonSovereignExclusions: [], countries: [registryCountry], extra: true },
+    selectorsByCountry: { AD: selector },
+    countryCodes: ['AD'],
+  }), /unknown registry key/i);
+  assert.throws(() => createCountryBuildConfigs({
+    registry: { release: '2026-06-17.0', schemaVersion: 'v1.17.0', nonSovereignExclusions: [], countries: [registryCountry] },
+    selectorsByCountry: { AD: { ...selector, productLevel: 'municipality' } },
+    countryCodes: ['AD'],
+  }), /registry selector mismatch/i);
 });
 
 test('builder binds optional audit reports and summary to bytes read back from final packages', async () => {
@@ -428,4 +657,24 @@ function signedArea(ring) {
     area += ring[index][0] * ring[index + 1][1] - ring[index + 1][0] * ring[index][1];
   }
   return area / 2;
+}
+
+function reviewedCountryConfig(overrides = {}) {
+  return {
+    sovereignCode: 'CN',
+    sourceCountryCodes: ['CN'],
+    productLevel: 'prefecture',
+    selectorVersion: 4,
+    release: '2026-06-17.0',
+    status: 'draft',
+    overtureSelector: { subtypes: ['prefecture'], adminLevels: [2], localTypeRules: [] },
+    allowlist: [],
+    denylist: [],
+    administrativeScheme: '地级行政区',
+    simplificationTolerance: 1e-10,
+    nameZh: '中国',
+    nameLocal: 'China',
+    aliases: ['中华人民共和国', 'PRC'],
+    ...overrides,
+  };
 }

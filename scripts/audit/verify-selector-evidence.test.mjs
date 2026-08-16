@@ -78,6 +78,7 @@ const completeFixture = () => ({
         referenceIds: ['official-register'],
       },
     ],
+    overlapExceptions: [],
   },
   finalDivisionIds: ['division-allowed', 'division-capital', 'division-coastal', 'division-ordinary', 'division-rural'],
 });
@@ -171,11 +172,44 @@ test('passes a complete draft fixture without promoting it to production verifie
     status: 'passed',
     sovereignCode: 'AA',
     release: '2026-06-17.0',
-    metrics: { finalCount: 5, referenceCount: 1, sampleCount: 6, exceptionCount: 2 },
+    metrics: { finalCount: 5, referenceCount: 1, sampleCount: 6, exceptionCount: 2, overlapExceptionCount: 0 },
     failures: [],
   });
   assert.equal(fixture.selector.status, 'draft');
   assert.equal(fixture.exceptions.status, 'draft');
+});
+
+test('revalidates the same evidence after explicit human status promotion', () => {
+  const fixture = completeFixture();
+  fixture.selector.status = 'verified';
+  fixture.exceptions.status = 'verified';
+
+  assert.equal(verifySelectorEvidence(fixture, { requiredStatus: 'verified' }).status, 'passed');
+  assert.ok(failureCodes(fixture).includes('DOCUMENT_METADATA_INVALID'));
+});
+
+test('accepts a referenced overlap exception and rejects an unreferenced or duplicate pair', () => {
+  const fixture = completeFixture();
+  fixture.exceptions.overlapExceptions = [{
+    id: 'capital-border-overlap',
+    kind: 'overlap',
+    divisionIds: ['division-capital', 'division-ordinary'],
+    reason: 'The official register defines a shared administrative surface.',
+    referenceIds: ['official-register'],
+  }];
+
+  const passed = verifySelectorEvidence(fixture);
+  assert.equal(passed.status, 'passed');
+  assert.equal(passed.metrics.overlapExceptionCount, 1);
+
+  fixture.exceptions.overlapExceptions.push({
+    ...fixture.exceptions.overlapExceptions[0],
+    id: 'duplicate-pair',
+    referenceIds: ['missing-reference'],
+  });
+  const codes = failureCodes(fixture);
+  assert.ok(codes.includes('OVERLAP_EXCEPTION_DUPLICATE'));
+  assert.ok(codes.includes('REFERENCE_ID_UNKNOWN'));
 });
 
 test('accepts at least 35,000 unique final division IDs with an exact count', () => {

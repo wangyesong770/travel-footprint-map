@@ -11,5 +11,14 @@
       "reason": "replace-with-reviewed-inclusion-or-exclusion-reason",
       "referenceIds": ["official-register"]
     }
+  ],
+  "overlapExceptions": [
+    {
+      "id": "replace-with-stable-overlap-exception-id",
+      "kind": "overlap",
+      "divisionIds": ["replace-with-first-division-id", "replace-with-second-division-id"],
+      "reason": "replace-with-reviewed-legal-or-administrative-overlap-reason",
+      "referenceIds": ["official-register"]
+    }
   ]
 }
