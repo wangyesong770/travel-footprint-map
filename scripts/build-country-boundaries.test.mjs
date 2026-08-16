@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'vitest';
 
-import { buildCountryBoundaries } from './build-country-boundaries.mjs';
+import { buildCountryBoundaries, promoteDirectorySet } from './build-country-boundaries.mjs';
 import { normalizeFeatureCollection } from './lib/boundary-normalize.mjs';
 
 const fixtures = path.resolve('scripts/fixtures/boundaries');
@@ -206,6 +207,218 @@ test('builder accepts extractor camelCase properties while preserving the divisi
     assert.deepEqual(indexIds, packageIds);
   } finally {
     await Promise.all([rm(inputDir, { recursive: true, force: true }), rm(outputDir, { recursive: true, force: true })]);
+  }
+});
+
+test('builder binds optional audit reports and summary to bytes read back from final packages', async () => {
+  const inputDir = await mkdtemp(path.join(tmpdir(), 'evidence-input-'));
+  const outputDir = await mkdtemp(path.join(tmpdir(), 'evidence-output-'));
+  const reportsDir = await mkdtemp(path.join(tmpdir(), 'evidence-reports-'));
+  try {
+    const input = await fixture();
+    input.metadata.boundaryVersion = '2026-06-17.0';
+    await writeFile(path.join(inputDir, 'CN.geojson'), JSON.stringify(input));
+    const reportEvidenceByCountry = {
+      CN: {
+        schemaVersion: 1,
+        countryCode: 'CN',
+        status: 'verified',
+        sourceRelease: '2026-06-17.0',
+        selectorVersion: 4,
+        productLevel: 'prefecture',
+        sourceCountryCodes: ['CN'],
+        counts: { source: 2, selected: 2, excluded: 0, allowlisted: 0, denylisted: 0 },
+        geometry: { invalid: 0, duplicate: 0, overlap: 0, missingName: 0 },
+        vertices: { p50: 5, p95: 5, max: 5 },
+        compressedBytes: { topojson: 0, gzip: 0, brotli: 0 },
+        performanceMs: { extract: 1, select: 1, audit: 1, build: 1, parse: 1 },
+        exceptions: [],
+        references: [{
+          title: '中华人民共和国行政区划代码', url: 'https://www.mca.gov.cn/mzsj/xzqh/',
+          retrievedOn: '2026-08-16', license: '中华人民共和国民政部公开信息',
+        }],
+        generatorCommit: '0123456789abcdef0123456789abcdef01234567',
+        auditedOn: '2026-08-16',
+        attribution: '© Overture Maps Foundation contributors; data available under ODbL 1.0',
+      },
+    };
+    const manifestResult = await buildCountryBoundaries({
+      inputDir,
+      outputDir,
+      auditReports: {
+        reportsDir,
+        evidenceByCountry: reportEvidenceByCountry,
+        expectedSelectorVersions: { CN: 4 },
+        sourceRelease: '2026-06-17.0',
+        generatorCommit: '0123456789abcdef0123456789abcdef01234567',
+      },
+    });
+
+    const diskManifest = JSON.parse(await readFile(path.join(outputDir, 'manifest.json'), 'utf8'));
+    const report = JSON.parse(await readFile(path.join(reportsDir, 'CN.json'), 'utf8'));
+    const summary = JSON.parse(await readFile(path.join(reportsDir, 'summary.json'), 'utf8'));
+    const packageBytes = await readFile(path.join(outputDir, 'CN.topojson'));
+    const diskChecksum = createHash('sha256').update(packageBytes).digest('hex');
+    assert.equal(manifestResult.CN.checksum, diskChecksum);
+    assert.equal(diskManifest.CN.checksum, diskChecksum);
+    assert.equal(report.packageChecksum, diskChecksum);
+    assert.equal(report.packageByteSize, packageBytes.byteLength);
+    assert.equal(summary.countries[0].packageChecksum, diskChecksum);
+  } finally {
+    await Promise.all([
+      rm(inputDir, { recursive: true, force: true }),
+      rm(outputDir, { recursive: true, force: true }),
+      rm(reportsDir, { recursive: true, force: true }),
+    ]);
+  }
+});
+
+test('builder leaves an existing audit report set byte-identical when any country evidence fails', async () => {
+  const rootDir = await mkdtemp(path.join(tmpdir(), 'evidence-rollback-'));
+  const inputDir = path.join(rootDir, 'input');
+  const outputDir = path.join(rootDir, 'output');
+  const reportsDir = path.join(rootDir, 'reports');
+  const existingCountry = Buffer.from('{"previous":"country"}\n');
+  const existingUsCountry = Buffer.from('{"previous":"us-country"}\n');
+  const existingSummary = Buffer.from('{"previous":"summary"}\n');
+  const existingCnPackage = Buffer.from('{"previous":"cn-package"}\n');
+  const existingUsPackage = Buffer.from('{"previous":"us-package"}\n');
+  const existingManifest = Buffer.from('{"previous":"manifest"}\n');
+  const existingIndex = Buffer.from('[{"previous":"index"}]\n');
+  try {
+    await Promise.all([mkdir(inputDir), mkdir(outputDir), mkdir(reportsDir)]);
+    for (const countryCode of ['CN', 'US']) {
+      const input = await fixture(countryCode);
+      input.metadata.boundaryVersion = '2026-06-17.0';
+      await writeFile(path.join(inputDir, `${countryCode}.geojson`), JSON.stringify(input));
+    }
+    await Promise.all([
+      writeFile(path.join(outputDir, 'CN.topojson'), existingCnPackage),
+      writeFile(path.join(outputDir, 'US.topojson'), existingUsPackage),
+      writeFile(path.join(outputDir, 'manifest.json'), existingManifest),
+      writeFile(path.join(outputDir, 'area-index.json'), existingIndex),
+      writeFile(path.join(reportsDir, 'CN.json'), existingCountry),
+      writeFile(path.join(reportsDir, 'US.json'), existingUsCountry),
+      writeFile(path.join(reportsDir, 'summary.json'), existingSummary),
+    ]);
+
+    const baseEvidence = {
+      schemaVersion: 1,
+      status: 'verified',
+      sourceRelease: '2026-06-17.0',
+      selectorVersion: 4,
+      counts: { source: 2, selected: 2, excluded: 0, allowlisted: 0, denylisted: 0 },
+      geometry: { invalid: 0, duplicate: 0, overlap: 0, missingName: 0 },
+      vertices: { p50: 5, p95: 5, max: 5 },
+      compressedBytes: { topojson: 0, gzip: 0, brotli: 0 },
+      performanceMs: { extract: 1, select: 1, audit: 1, build: 1, parse: 1 },
+      exceptions: [],
+      references: [{
+        title: 'Official administrative reference', url: 'https://example.gov/reference',
+        retrievedOn: '2026-08-16', license: 'Public information',
+      }],
+      generatorCommit: '0123456789abcdef0123456789abcdef01234567',
+      auditedOn: '2026-08-16',
+      attribution: '© Overture Maps Foundation contributors; data available under ODbL 1.0',
+    };
+
+    await assert.rejects(
+      buildCountryBoundaries({
+        inputDir,
+        outputDir,
+        auditReports: {
+          reportsDir,
+          evidenceByCountry: {
+            CN: { ...baseEvidence, countryCode: 'CN', productLevel: 'prefecture', sourceCountryCodes: ['CN'] },
+            US: { ...baseEvidence, countryCode: 'US', productLevel: 'county-equivalent', sourceCountryCodes: ['US'], selectorVersion: 3 },
+          },
+          expectedSelectorVersions: { CN: 4, US: 4 },
+          sourceRelease: '2026-06-17.0',
+          generatorCommit: '0123456789abcdef0123456789abcdef01234567',
+        },
+      }),
+      /selector version mismatch/i,
+    );
+
+    assert.deepEqual(await readFile(path.join(reportsDir, 'CN.json')), existingCountry);
+    assert.deepEqual(await readFile(path.join(reportsDir, 'US.json')), existingUsCountry);
+    assert.deepEqual(await readFile(path.join(reportsDir, 'summary.json')), existingSummary);
+    assert.deepEqual(await readFile(path.join(outputDir, 'CN.topojson')), existingCnPackage);
+    assert.deepEqual(await readFile(path.join(outputDir, 'US.topojson')), existingUsPackage);
+    assert.deepEqual(await readFile(path.join(outputDir, 'manifest.json')), existingManifest);
+    assert.deepEqual(await readFile(path.join(outputDir, 'area-index.json')), existingIndex);
+    assert.deepEqual((await readdir(rootDir)).sort(), ['input', 'output', 'reports']);
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('builder leaves no output or temporary artifacts when a first audited build fails', async () => {
+  const rootDir = await mkdtemp(path.join(tmpdir(), 'evidence-first-failure-'));
+  const inputDir = path.join(rootDir, 'input');
+  const outputDir = path.join(rootDir, 'output');
+  const reportsDir = path.join(rootDir, 'reports');
+  try {
+    await mkdir(inputDir);
+    const input = await fixture();
+    input.metadata.boundaryVersion = '2026-06-17.0';
+    await writeFile(path.join(inputDir, 'CN.geojson'), JSON.stringify(input));
+
+    await assert.rejects(
+      buildCountryBoundaries({
+        inputDir,
+        outputDir,
+        auditReports: {
+          reportsDir,
+          evidenceByCountry: { CN: {} },
+          expectedSelectorVersions: { CN: 4 },
+          sourceRelease: '2026-06-17.0',
+          generatorCommit: '0123456789abcdef0123456789abcdef01234567',
+        },
+      }),
+      /report .*required|unknown report key/i,
+    );
+
+    assert.deepEqual(await readdir(rootDir), ['input']);
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('directory promotion restores every backup and removes staging if the second destination switch fails', async () => {
+  const rootDir = await mkdtemp(path.join(tmpdir(), 'evidence-promotion-failure-'));
+  const outputDir = path.join(rootDir, 'output');
+  const reportsDir = path.join(rootDir, 'reports');
+  const outputStagingDir = path.join(rootDir, '.output.staging');
+  const reportsStagingDir = path.join(rootDir, '.reports.staging');
+  try {
+    await Promise.all([mkdir(outputDir), mkdir(reportsDir), mkdir(outputStagingDir), mkdir(reportsStagingDir)]);
+    await Promise.all([
+      writeFile(path.join(outputDir, 'old'), 'old-output'),
+      writeFile(path.join(reportsDir, 'old'), 'old-reports'),
+      writeFile(path.join(outputStagingDir, 'new'), 'new-output'),
+      writeFile(path.join(reportsStagingDir, 'new'), 'new-reports'),
+    ]);
+    let renameCount = 0;
+    const failSecondPromotion = async (from, to) => {
+      renameCount += 1;
+      if (renameCount === 4) throw new Error('injected second promotion failure');
+      await rename(from, to);
+    };
+
+    await assert.rejects(
+      promoteDirectorySet([
+        { stagingDir: outputStagingDir, destinationDir: outputDir },
+        { stagingDir: reportsStagingDir, destinationDir: reportsDir },
+      ], { renamePath: failSecondPromotion }),
+      /injected second promotion failure/,
+    );
+
+    assert.equal(await readFile(path.join(outputDir, 'old'), 'utf8'), 'old-output');
+    assert.equal(await readFile(path.join(reportsDir, 'old'), 'utf8'), 'old-reports');
+    assert.deepEqual((await readdir(rootDir)).sort(), ['output', 'reports']);
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
   }
 });
 

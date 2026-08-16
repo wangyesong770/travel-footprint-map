@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Buffer } from 'node:buffer';
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -9,6 +9,7 @@ import { topology } from 'topojson-server';
 import { presimplify, simplify } from 'topojson-simplify';
 
 import { selectCountryFeatures } from './audit/apply-selector.mjs';
+import { writeAuditSummary, writeCountryAuditReport } from './audit/write-report.mjs';
 import { normalizeFeatureCollection, normalizeMetadata } from './lib/boundary-normalize.mjs';
 
 const MAX_INPUT_BYTES = 256 * 1024 * 1024;
@@ -28,7 +29,7 @@ const COUNTRY_CONFIG = Object.freeze({
   }),
 });
 
-export async function buildCountryBoundaries({ inputDir, outputDir, indexModulePath }) {
+export async function buildCountryBoundaries({ inputDir, outputDir, indexModulePath, auditReports }) {
   if (typeof inputDir !== 'string' || typeof outputDir !== 'string') throw new Error('inputDir and outputDir are required');
   const entries = (await readdir(inputDir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name, 'en'));
   if (entries.length === 0) throw new Error('input directory contains no country files');
@@ -87,16 +88,190 @@ export async function buildCountryBoundaries({ inputDir, outputDir, indexModuleP
   indexRecords.sort((left, right) => indexIdentity(left).localeCompare(indexIdentity(right), 'en'));
   assertIndexParity(indexRecords, outputs);
 
-  await mkdir(outputDir, { recursive: true });
-  for (const [fileName, bytes] of outputs) await writeFile(path.join(outputDir, fileName), bytes);
-  await writeFile(path.join(outputDir, 'manifest.json'), `${canonicalJson(manifest)}\n`, 'utf8');
-  await writeFile(path.join(outputDir, 'area-index.json'), `${canonicalJson(indexRecords)}\n`, 'utf8');
-  if (indexModulePath !== undefined) {
-    await mkdir(path.dirname(indexModulePath), { recursive: true });
-    const source = `import type { AreaIndexRecord } from '../areas/area-index';\n\nexport const AREA_INDEX_RECORDS = ${escapeInlineScript(canonicalJson(indexRecords))} as const satisfies readonly AreaIndexRecord[];\n`;
-    await writeFile(indexModulePath, source, 'utf8');
+  const outputStagingDir = await createSiblingStagingDirectory(outputDir);
+  let reportsPromotion;
+  const indexSource = indexModulePath === undefined ? undefined
+    : `import type { AreaIndexRecord } from '../areas/area-index';\n\nexport const AREA_INDEX_RECORDS = ${escapeInlineScript(canonicalJson(indexRecords))} as const satisfies readonly AreaIndexRecord[];\n`;
+  try {
+    await mkdir(outputStagingDir);
+    for (const [fileName, bytes] of outputs) await writeFile(path.join(outputStagingDir, fileName), bytes);
+    await bindManifestToFinalPackageBytes(outputStagingDir, manifest);
+    await atomicWriteText(path.join(outputStagingDir, 'manifest.json'), `${canonicalJson(manifest)}\n`);
+    await atomicWriteText(path.join(outputStagingDir, 'area-index.json'), `${canonicalJson(indexRecords)}\n`);
+    if (indexModulePath !== undefined && isPathInside(outputDir, indexModulePath)) {
+      const stagedIndexModulePath = path.join(outputStagingDir, path.relative(path.resolve(outputDir), path.resolve(indexModulePath)));
+      await atomicWriteText(stagedIndexModulePath, indexSource);
+    }
+    if (auditReports !== undefined) {
+      assertSeparateReleaseDirectories(outputDir, auditReports?.reportsDir);
+      reportsPromotion = await stageBoundAuditReports({ auditReports, manifest, outputDir: outputStagingDir });
+    }
+    await promoteDirectorySet([
+      { stagingDir: outputStagingDir, destinationDir: outputDir },
+      ...(reportsPromotion === undefined ? [] : [reportsPromotion]),
+    ]);
+  } catch (error) {
+    await Promise.all([
+      rm(outputStagingDir, { recursive: true, force: true }),
+      reportsPromotion === undefined ? Promise.resolve() : rm(reportsPromotion.stagingDir, { recursive: true, force: true }),
+    ]);
+    throw error;
+  }
+  if (indexModulePath !== undefined && !isPathInside(outputDir, indexModulePath)) {
+    await atomicWriteText(indexModulePath, indexSource);
   }
   return manifest;
+}
+
+async function bindManifestToFinalPackageBytes(outputDir, manifest) {
+  for (const countryCode of Object.keys(manifest).sort((left, right) => left.localeCompare(right, 'en'))) {
+    const bytes = await readFile(path.join(outputDir, `${countryCode}.topojson`));
+    if (bytes.byteLength === 0) throw new Error(`final package is empty: ${countryCode}`);
+    manifest[countryCode].byteSize = bytes.byteLength;
+    manifest[countryCode].checksum = createHash('sha256').update(bytes).digest('hex');
+  }
+}
+
+async function stageBoundAuditReports({ auditReports, manifest, outputDir }) {
+  if (auditReports === null || typeof auditReports !== 'object' || Array.isArray(auditReports)) {
+    throw new Error('auditReports must be an object');
+  }
+  const { reportsDir, evidenceByCountry, expectedSelectorVersions, sourceRelease, generatorCommit } = auditReports;
+  if (typeof reportsDir !== 'string' || evidenceByCountry === null || typeof evidenceByCountry !== 'object'
+    || Array.isArray(evidenceByCountry) || expectedSelectorVersions === null
+    || typeof expectedSelectorVersions !== 'object' || Array.isArray(expectedSelectorVersions)) {
+    throw new Error('invalid auditReports configuration');
+  }
+  const countries = Object.keys(manifest).sort((left, right) => left.localeCompare(right, 'en'));
+  if (!sameStringSet(countries, Object.keys(evidenceByCountry))
+    || !sameStringSet(countries, Object.keys(expectedSelectorVersions))) {
+    throw new Error('audit report country set mismatch');
+  }
+  const reportsParent = path.dirname(reportsDir);
+  const reportsName = path.basename(reportsDir);
+  if (reportsName.length === 0 || reportsName === '.' || reportsName === path.sep) {
+    throw new Error('invalid audit reports directory');
+  }
+  await mkdir(reportsParent, { recursive: true });
+  const stagingDir = path.join(reportsParent, `.${reportsName}.${process.pid}.${randomUUID()}.staging`);
+  try {
+    const reportPaths = [];
+    for (const countryCode of countries) {
+      const reportPath = path.join(stagingDir, `${countryCode}.json`);
+      await writeCountryAuditReport({
+        packagePath: path.join(outputDir, `${countryCode}.topojson`),
+        reportPath,
+        manifestEntry: manifest[countryCode],
+        evidence: evidenceByCountry[countryCode],
+        expectedSelectorVersion: expectedSelectorVersions[countryCode],
+      });
+      reportPaths.push(reportPath);
+    }
+    await writeAuditSummary({
+      reportPaths,
+      outputPath: path.join(stagingDir, 'summary.json'),
+      sourceRelease,
+      generatorCommit,
+    });
+    return { stagingDir, destinationDir: reportsDir };
+  } catch (error) {
+    await rm(stagingDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function createSiblingStagingDirectory(destinationDir) {
+  const destinationName = path.basename(destinationDir);
+  if (destinationName.length === 0 || destinationName === '.' || destinationName === path.sep) {
+    throw new Error('invalid output directory');
+  }
+  const parent = path.dirname(destinationDir);
+  await mkdir(parent, { recursive: true });
+  return path.join(parent, `.${destinationName}.${process.pid}.${randomUUID()}.staging`);
+}
+
+export async function promoteDirectorySet(entries, { renamePath = rename } = {}) {
+  const destinations = entries.map(({ destinationDir }) => path.resolve(destinationDir));
+  if (new Set(destinations).size !== destinations.length) throw new Error('duplicate release destination');
+  const prepared = [];
+  try {
+    for (const entry of entries) {
+      const destinationStat = await stat(entry.destinationDir).catch((error) => {
+        if (error?.code === 'ENOENT') return null;
+        throw error;
+      });
+      if (destinationStat !== null && !destinationStat.isDirectory()) {
+        throw new Error('release destination must be a directory');
+      }
+      prepared.push({ ...entry, destinationStat, backupDir: undefined, promoted: false });
+    }
+    for (const entry of prepared) {
+      if (entry.destinationStat === null) continue;
+      const backupDir = path.join(
+        path.dirname(entry.destinationDir),
+        `.${path.basename(entry.destinationDir)}.${process.pid}.${randomUUID()}.backup`,
+      );
+      await renamePath(entry.destinationDir, backupDir);
+      entry.backupDir = backupDir;
+    }
+    for (const entry of prepared) {
+      await renamePath(entry.stagingDir, entry.destinationDir);
+      entry.promoted = true;
+    }
+  } catch (error) {
+    let rollbackError;
+    for (const entry of [...prepared].reverse()) {
+      try {
+        if (entry.promoted) await rm(entry.destinationDir, { recursive: true, force: true });
+        if (entry.backupDir !== undefined) await renamePath(entry.backupDir, entry.destinationDir);
+      } catch (candidate) {
+        rollbackError ??= candidate;
+      }
+    }
+    await Promise.allSettled(entries.map(({ stagingDir }) => rm(stagingDir, { recursive: true, force: true })));
+    if (rollbackError !== undefined) {
+      throw new AggregateError(
+        [error, rollbackError],
+        'release directory promotion and rollback failed',
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  await Promise.all(prepared.map(({ backupDir }) => (
+    backupDir === undefined ? Promise.resolve() : rm(backupDir, { recursive: true, force: true })
+  )));
+}
+
+function assertSeparateReleaseDirectories(outputDir, reportsDir) {
+  if (typeof reportsDir !== 'string') return;
+  const output = path.resolve(outputDir);
+  const reports = path.resolve(reportsDir);
+  if (output === reports || output.startsWith(`${reports}${path.sep}`) || reports.startsWith(`${output}${path.sep}`)) {
+    throw new Error('output and audit reports directories must be separate');
+  }
+}
+
+function isPathInside(directory, candidate) {
+  const relative = path.relative(path.resolve(directory), path.resolve(candidate));
+  return relative.length > 0 && !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative);
+}
+
+function sameStringSet(expected, actual) {
+  return expected.length === actual.length
+    && [...actual].sort((left, right) => left.localeCompare(right, 'en')).every((value, index) => value === expected[index]);
+}
+
+async function atomicWriteText(outputPath, contents) {
+  await mkdir(path.dirname(outputPath), { recursive: true });
+  const temporaryPath = path.join(path.dirname(outputPath), `.${path.basename(outputPath)}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    await writeFile(temporaryPath, contents, { encoding: 'utf8', flag: 'wx' });
+    await rename(temporaryPath, outputPath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true });
+    throw error;
+  }
 }
 
 function toSelectorRows(collection, countryCode) {
