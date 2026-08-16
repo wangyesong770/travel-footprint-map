@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build && node scripts/inline-build.mjs",
+    "audit:extract": "node scripts/audit/extract-overture.mjs",
+    "audit:snapshot-source": "node scripts/audit/snapshot-source-manifest.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

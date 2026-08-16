@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "release": "2026-06-17.0",
+  "retrievedAt": "2026-08-16",
+  "objects": [
+    {
+      "key": "theme=divisions/type=division/part-00000-7d0ed1f9-f435-5dd9-9cef-68ac78663eca-c000.zstd.parquet",
+      "byteSize": 573239589,
+      "etag": "2f6a451ac0e8a7d2ca0bbbdec5d3b548-9",
+      "url": "https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/release/2026-06-17.0/theme%3Ddivisions/type%3Ddivision/part-00000-7d0ed1f9-f435-5dd9-9cef-68ac78663eca-c000.zstd.parquet",
+      "sha256": "63797b3c3aa2448cafb32d1f0a88a61906c315d1e86f2e241f4f696ed937991d"
+    },
+    {
+      "key": "theme=divisions/type=division_area/part-00000-f4c7088f-5b3c-5ae1-9aac-12a5529991a7-c000.zstd.parquet",
+      "byteSize": 674433229,
+      "etag": "0699f211e93beb92f3b85d437a42d2a2-11",
+      "url": "https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/release/2026-06-17.0/theme%3Ddivisions/type%3Ddivision_area/part-00000-f4c7088f-5b3c-5ae1-9aac-12a5529991a7-c000.zstd.parquet",
+      "sha256": "946491aa452c56cb1d7e438e8a88943e88ee1df8f16f7e5327f87c565bf87a18"
+    },
+    {
+      "key": "theme=divisions/type=division_area/part-00001-212c3a61-4b1e-56b4-846c-c495000e714f-c000.zstd.parquet",
+      "byteSize": 473186754,
+      "etag": "a35ae10bbeceee380751ed51426ae71f-8",
+      "url": "https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/release/2026-06-17.0/theme%3Ddivisions/type%3Ddivision_area/part-00001-212c3a61-4b1e-56b4-846c-c495000e714f-c000.zstd.parquet",
+      "sha256": "81d10cfec3ec836ab0f9e376d22ed65ba90bbaba8c745dd6808dee464deddab8"
+    },
+    {
+      "key": "theme=divisions/type=division_area/part-00002-d1f374e3-8cba-5ad0-8f5c-7906a9faaafa-c000.zstd.parquet",
+      "byteSize": 662904544,
+      "etag": "c71aa6625673b65140902cff692106de-10",
+      "url": "https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/release/2026-06-17.0/theme%3Ddivisions/type%3Ddivision_area/part-00002-d1f374e3-8cba-5ad0-8f5c-7906a9faaafa-c000.zstd.parquet",
+      "sha256": "dd1d98c337d42a61ca9f7230ff6d72643e70e51e8c4abd66451afa225a205967"
+    },
+    {
+      "key": "theme=divisions/type=division_area/part-00003-8012af75-51b9-5927-b209-ce85a7c6659e-c000.zstd.parquet",
+      "byteSize": 722874306,
+      "etag": "d8ae64ffb1472e7db48b5641e749a0ea-11",
+      "url": "https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/release/2026-06-17.0/theme%3Ddivisions/type%3Ddivision_area/part-00003-8012af75-51b9-5927-b209-ce85a7c6659e-c000.zstd.parquet",
+      "sha256": "6fd5cfac736d965d0968fd0272ceb80dddba29ae754ebf0144a9691f08239b7c"
+    },
+    {
+      "key": "theme=divisions/type=division_area/part-00004-15e964af-108f-5ec3-b8b0-a2fec96fb680-c000.zstd.parquet",
+      "byteSize": 502942041,
+      "etag": "27866564a76c07baf0dcfe0f7dc18326-8",
+      "url": "https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/release/2026-06-17.0/theme%3Ddivisions/type%3Ddivision_area/part-00004-15e964af-108f-5ec3-b8b0-a2fec96fb680-c000.zstd.parquet",
+      "sha256": "d6083f1e68650d4d338e86b6a1b6ba0e13e099be7b95d033f2695f24c3d12755"
+    },
+    {
+      "key": "theme=divisions/type=division_area/part-00005-d7886aca-24de-5aa2-a6ab-f47389acb2c7-c000.zstd.parquet",
+      "byteSize": 192716107,
+      "etag": "da4d8ed006a3d6d5ee4a5003fd3db646-3",
+      "url": "https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/release/2026-06-17.0/theme%3Ddivisions/type%3Ddivision_area/part-00005-d7886aca-24de-5aa2-a6ab-f47389acb2c7-c000.zstd.parquet",
+      "sha256": "b1d4abb27231fefbdde944ab8224c943615c6fe85627eef6bc70c4a6618455e5"
+    },
+    {
+      "key": "theme=divisions/type=division_area/part-00006-70bf6111-3c8d-5cd6-b586-4a8e4852ee57-c000.zstd.parquet",
+      "byteSize": 669024353,
+      "etag": "9eca599c224c1178933392ad728190d4-10",
+      "url": "https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/release/2026-06-17.0/theme%3Ddivisions/type%3Ddivision_area/part-00006-70bf6111-3c8d-5cd6-b586-4a8e4852ee57-c000.zstd.parquet",
+      "sha256": "6e96e237ca667adac0c3987f2b0d309a304e78297ee3fc311ffe05d5072d0489"
+    },
+    {
+      "key": "theme=divisions/type=division_area/part-00007-4c5b2a3d-5bed-51c1-8a23-1f16237e0db2-c000.zstd.parquet",
+      "byteSize": 530845029,
+      "etag": "3a3a440877e754acb8644ed57d4611d6-8",
+      "url": "https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/release/2026-06-17.0/theme%3Ddivisions/type%3Ddivision_area/part-00007-4c5b2a3d-5bed-51c1-8a23-1f16237e0db2-c000.zstd.parquet",
+      "sha256": "2a332b8ab3be1a54ec47846b6f7ff72a31249eeb7b24b9dcd0e763c70c004191"
+    }
+  ]
+}
