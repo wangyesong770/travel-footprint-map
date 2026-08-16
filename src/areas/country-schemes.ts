@@ -1,36 +1,27 @@
 import type { AreaId, CountryCode, CountryScheme } from './types';
+import { requireVerifiedCountryConfig } from '../audit/registry';
+
+type VerifiedCountryScheme = Omit<CountryScheme, 'status'> & { readonly status: 'verified' };
 
 const freezeScheme = (
-  scheme: Omit<CountryScheme, 'acceptedLevels'> & { acceptedLevels: readonly string[] },
-): CountryScheme =>
+  scheme: Omit<VerifiedCountryScheme, 'acceptedLevels'> & { acceptedLevels: readonly string[] },
+): VerifiedCountryScheme =>
   Object.freeze({
     ...scheme,
     acceptedLevels: Object.freeze([...scheme.acceptedLevels]),
   });
 
-const SCHEMES: Readonly<Record<string, CountryScheme>> = Object.freeze({
-  CN: freezeScheme({
-    countryCode: 'CN',
-    source: 'overture',
-    acceptedLevels: ['prefecture'],
-    labelZh: '地级行政区',
-    status: 'verified',
-  }),
-  JP: freezeScheme({
-    countryCode: 'JP',
-    source: 'overture',
-    acceptedLevels: ['municipality'],
-    labelZh: '市町村',
-    status: 'verified',
-  }),
-  US: freezeScheme({
-    countryCode: 'US',
-    source: 'overture',
-    acceptedLevels: ['county', 'independent-city'],
-    labelZh: '县及独立市等同行政区',
-    status: 'verified',
-  }),
-});
+const PRESENTATION: Readonly<Record<string, { readonly acceptedLevels: readonly string[]; readonly labelZh: string }>> =
+  Object.freeze({
+    CN: Object.freeze({ acceptedLevels: Object.freeze(['prefecture']), labelZh: '地级行政区' }),
+    JP: Object.freeze({ acceptedLevels: Object.freeze(['municipality']), labelZh: '市町村' }),
+    US: Object.freeze({
+      acceptedLevels: Object.freeze(['county', 'independent-city']),
+      labelZh: '县及独立市等同行政区',
+    }),
+  });
+
+const schemeCache = new Map<string, VerifiedCountryScheme>();
 
 const normalizeCountryCode = (countryCode: string): CountryCode => {
   if (!/^[A-Za-z]{2}$/.test(countryCode)) {
@@ -39,18 +30,21 @@ const normalizeCountryCode = (countryCode: string): CountryCode => {
   return countryCode.toUpperCase() as CountryCode;
 };
 
-export const getCountryScheme = (countryCode: string): CountryScheme => {
+export const getCountryScheme = (countryCode: string): VerifiedCountryScheme => {
   const normalized = normalizeCountryCode(countryCode);
-  const configured = SCHEMES[normalized];
-  if (configured) return configured;
-
-  return freezeScheme({
-    countryCode: normalized,
-    source: 'unconfigured',
-    acceptedLevels: [],
-    labelZh: '待配置行政层级',
-    status: 'fallback',
+  const cached = schemeCache.get(normalized);
+  if (cached) return cached;
+  const config = requireVerifiedCountryConfig(normalized);
+  const presentation = PRESENTATION[normalized];
+  const scheme = freezeScheme({
+    countryCode: config.sovereignCode,
+    source: 'overture',
+    acceptedLevels: presentation?.acceptedLevels ?? [config.productLevel],
+    labelZh: presentation?.labelZh ?? config.productLevel,
+    status: 'verified',
   });
+  schemeCache.set(normalized, scheme);
+  return scheme;
 };
 
 export interface AreaIdentity {

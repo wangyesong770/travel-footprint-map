@@ -1,0 +1,106 @@
+{
+  "release": "2026-06-17.0",
+  "schemaVersion": "v1.17.0",
+  "countries": [
+    {
+      "sovereignCode": "CN",
+      "sourceCountryCodes": ["CN", "HK", "MO", "TW"],
+      "productLevel": "prefecture",
+      "selectorVersion": 1,
+      "overtureSelector": {
+        "subtypes": ["locality"],
+        "adminLevels": [7],
+        "localTypeRules": [{ "field": "local_type", "values": ["prefecture"] }]
+      },
+      "allowlist": [],
+      "denylist": [],
+      "expectedCount": { "minimum": 300, "maximum": 400, "referenceDate": "2026-08-16" },
+      "officialReferences": [
+        {
+          "title": "中华人民共和国行政区划代码",
+          "url": "https://www.mca.gov.cn/mzsj/xzqh/",
+          "retrievedOn": "2026-08-16",
+          "license": "中华人民共和国民政部公开信息"
+        }
+      ],
+      "perspective": "china-official",
+      "auditedAt": "2026-08-16",
+      "status": "draft"
+    },
+    {
+      "sovereignCode": "JP",
+      "sourceCountryCodes": ["JP"],
+      "productLevel": "municipality",
+      "selectorVersion": 1,
+      "overtureSelector": {
+        "subtypes": ["locality"],
+        "adminLevels": [7],
+        "localTypeRules": [{ "field": "local_type", "values": ["city", "town", "village"] }]
+      },
+      "allowlist": [],
+      "denylist": [],
+      "expectedCount": { "minimum": 1700, "maximum": 1800, "referenceDate": "2026-08-16" },
+      "officialReferences": [
+        {
+          "title": "地方公共団体コード住所",
+          "url": "https://www.soumu.go.jp/denshijiti/code.html",
+          "retrievedOn": "2026-08-16",
+          "license": "総務省公開情報"
+        }
+      ],
+      "perspective": "overture-default",
+      "auditedAt": "2026-08-16",
+      "status": "draft"
+    },
+    {
+      "sovereignCode": "US",
+      "sourceCountryCodes": ["US"],
+      "productLevel": "county-equivalent",
+      "selectorVersion": 1,
+      "overtureSelector": {
+        "subtypes": ["county"],
+        "adminLevels": [6],
+        "localTypeRules": []
+      },
+      "allowlist": [],
+      "denylist": [],
+      "expectedCount": { "minimum": 3100, "maximum": 3300, "referenceDate": "2026-08-16" },
+      "officialReferences": [
+        {
+          "title": "United States Census Bureau Counties",
+          "url": "https://www.census.gov/geographies/reference-files/time-series/geo/gazetteer-files.html",
+          "retrievedOn": "2026-08-16",
+          "license": "United States Government public domain"
+        }
+      ],
+      "perspective": "overture-default",
+      "auditedAt": "2026-08-16",
+      "status": "draft"
+    },
+    {
+      "sovereignCode": "FR",
+      "sourceCountryCodes": ["FR", "GF", "GP", "MQ", "RE", "YT"],
+      "productLevel": "commune",
+      "selectorVersion": 1,
+      "overtureSelector": {
+        "subtypes": ["locality"],
+        "adminLevels": [8],
+        "localTypeRules": [{ "field": "local_type", "values": ["commune"] }]
+      },
+      "allowlist": [],
+      "denylist": [],
+      "expectedCount": { "minimum": 34000, "maximum": 36000, "referenceDate": "2026-08-16" },
+      "officialReferences": [
+        {
+          "title": "Code officiel géographique",
+          "url": "https://www.insee.fr/fr/information/2560452",
+          "retrievedOn": "2026-08-16",
+          "license": "Licence Ouverte"
+        }
+      ],
+      "perspective": "overture-default",
+      "auditedAt": "2026-08-16",
+      "status": "draft"
+    }
+  ]
+}
