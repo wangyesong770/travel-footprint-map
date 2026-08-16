@@ -11,21 +11,21 @@ const freezeScheme = (
 const SCHEMES: Readonly<Record<string, CountryScheme>> = Object.freeze({
   CN: freezeScheme({
     countryCode: 'CN',
-    source: 'openstreetmap',
+    source: 'overture',
     acceptedLevels: ['prefecture'],
     labelZh: '地级行政区',
     status: 'verified',
   }),
   JP: freezeScheme({
     countryCode: 'JP',
-    source: 'openstreetmap',
+    source: 'overture',
     acceptedLevels: ['municipality'],
     labelZh: '市町村',
     status: 'verified',
   }),
   US: freezeScheme({
     countryCode: 'US',
-    source: 'openstreetmap',
+    source: 'overture',
     acceptedLevels: ['county', 'independent-city'],
     labelZh: '县及独立市等同行政区',
     status: 'verified',

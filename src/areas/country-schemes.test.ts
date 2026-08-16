@@ -7,6 +7,7 @@ describe('getCountryScheme', () => {
     expect(getCountryScheme('CN')).toMatchObject({
       countryCode: 'CN',
       labelZh: '地级行政区',
+      source: 'overture',
       status: 'verified',
     });
     expect(getCountryScheme('CN').acceptedLevels).toContain('prefecture');
@@ -16,6 +17,7 @@ describe('getCountryScheme', () => {
     expect(getCountryScheme('JP')).toMatchObject({
       countryCode: 'JP',
       labelZh: '市町村',
+      source: 'overture',
       status: 'verified',
     });
     expect(getCountryScheme('JP').acceptedLevels).toContain('municipality');
@@ -24,6 +26,7 @@ describe('getCountryScheme', () => {
   it('maps the United States to county and independent-city equivalents', () => {
     expect(getCountryScheme('US')).toMatchObject({
       countryCode: 'US',
+      source: 'overture',
       status: 'verified',
     });
     expect(getCountryScheme('US').acceptedLevels).toEqual(

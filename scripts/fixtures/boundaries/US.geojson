@@ -1,0 +1,42 @@
+{
+  "type": "FeatureCollection",
+  "metadata": {
+    "boundaryVersion": "2026-08-16-fixture",
+    "retrievedAt": "2026-08-16T00:00:00.000Z",
+    "source": "Overture Maps Divisions division_area",
+    "license": "ODbL-1.0",
+    "attribution": "© Overture Maps Foundation contributors; data available under ODbL 1.0"
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "id": "gers-us-fairfax-city",
+      "properties": {
+        "country": "US",
+        "subtype": "independent-city",
+        "admin_level": 2,
+        "names": { "primary": "Fairfax", "common": { "zh": "费尔法克斯", "en": "Fairfax" } },
+        "aliases": []
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-77.34, 38.83], [-77.27, 38.83], [-77.27, 38.88], [-77.34, 38.88], [-77.34, 38.83]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "gers-us-fairfax-county",
+      "properties": {
+        "country": "US",
+        "subtype": "county",
+        "admin_level": 2,
+        "names": { "primary": "Fairfax County", "common": { "zh": "费尔法克斯县", "en": "Fairfax County" } },
+        "aliases": ["Fairfax"]
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-77.6, 38.6], [-77.0, 38.6], [-77.0, 39.0], [-77.6, 39.0], [-77.6, 38.6]]]
+      }
+    }
+  ]
+}

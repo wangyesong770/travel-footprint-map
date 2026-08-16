@@ -1,0 +1,43 @@
+{
+  "type": "FeatureCollection",
+  "metadata": {
+    "boundaryVersion": "2026-08-16-fixture",
+    "retrievedAt": "2026-08-16T00:00:00.000Z",
+    "source": "Overture Maps Divisions division_area",
+    "license": "ODbL-1.0",
+    "attribution": "© Overture Maps Foundation contributors; data available under ODbL 1.0"
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "id": "gers-cn-shanghai",
+      "properties": {
+        "country": "CN",
+        "subtype": "prefecture",
+        "admin_level": 2,
+        "names": { "primary": "上海市", "common": { "zh": "上海市", "en": "Shanghai" } },
+        "aliases": ["沪", "<上海 & 海上>"],
+        "untrusted": "must not survive"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[121.0, 31.0], [121.0, 31.8], [122.0, 31.8], [122.0, 31.0], [121.0, 31.0]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "gers-cn-beijing",
+      "properties": {
+        "country": "CN",
+        "subtype": "prefecture",
+        "admin_level": 2,
+        "names": { "primary": "Beijing", "common": { "zh": "北京市", "en": "Beijing" } },
+        "aliases": ["北京", "Peking"]
+      },
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [[[[116.0, 39.5], [117.0, 39.5], [117.0, 40.5], [116.0, 40.5], [116.0, 39.5]]]]
+      }
+    }
+  ]
+}
