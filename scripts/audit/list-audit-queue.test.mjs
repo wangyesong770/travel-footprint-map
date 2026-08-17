@@ -218,9 +218,42 @@ describe('snapshot-backed CLI input', () => {
         schemaVersion: 1,
         release: '2026-06-17.0',
         rowCounts: { US: 12, CN: 9, HK: 2 },
+        unresolved: { rowCount: 0, byteSize: 128, sha256: 'a'.repeat(64) },
       }));
       await expect(readSnapshotSourceCodes(path.join(directory, 'snapshot'), '2026-06-17.0'))
         .resolves.toEqual(['CN', 'HK', 'US']);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects legacy snapshot metadata without the unresolved-row contract', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'audit-queue-'));
+    try {
+      await writeFile(path.join(directory, 'metadata.json'), JSON.stringify({
+        schemaVersion: 1,
+        release: '2026-06-17.0',
+        rowCounts: { CN: 9 },
+      }));
+      await expect(readSnapshotSourceCodes(directory, '2026-06-17.0'))
+        .rejects.toThrow(/^SNAPSHOT_METADATA_INVALID$/);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks a snapshot that still contains unresolved source-country rows', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'audit-queue-'));
+    try {
+      await mkdir(path.join(directory, 'snapshot'));
+      await writeFile(path.join(directory, 'snapshot', 'metadata.json'), JSON.stringify({
+        schemaVersion: 1,
+        release: '2026-06-17.0',
+        rowCounts: { CN: 9 },
+        unresolved: { rowCount: 2, byteSize: 128, sha256: 'a'.repeat(64) },
+      }));
+      await expect(readSnapshotSourceCodes(path.join(directory, 'snapshot'), '2026-06-17.0'))
+        .rejects.toThrow(/^SNAPSHOT_UNRESOLVED_ROWS$/);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

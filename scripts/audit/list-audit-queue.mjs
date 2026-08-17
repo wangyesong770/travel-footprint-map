@@ -258,6 +258,14 @@ export async function readSnapshotSourceCodes(snapshotDir, release) {
     throw new Error('SNAPSHOT_METADATA_INVALID');
   }
   if (metadata.release !== release) throw new Error('SNAPSHOT_RELEASE_MISMATCH');
+  const unresolved = metadata.unresolved;
+  if (!unresolved || typeof unresolved !== 'object' || Array.isArray(unresolved)
+    || !Number.isSafeInteger(unresolved.rowCount) || unresolved.rowCount < 0
+    || !Number.isSafeInteger(unresolved.byteSize) || unresolved.byteSize < 1
+    || typeof unresolved.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(unresolved.sha256)) {
+    throw new Error('SNAPSHOT_METADATA_INVALID');
+  }
+  if (unresolved.rowCount > 0) throw new Error('SNAPSHOT_UNRESOLVED_ROWS');
   const codes = Object.keys(metadata.rowCounts).sort(compare);
   if (codes.length === 0) throw new Error('SNAPSHOT_METADATA_INVALID');
   for (const code of codes) {

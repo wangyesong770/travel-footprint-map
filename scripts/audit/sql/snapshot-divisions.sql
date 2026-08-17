@@ -38,6 +38,19 @@ WITH (FORMAT PARQUET, PARTITION_BY (sourceCountryCode), COMPRESSION ZSTD);
 COPY (
   SELECT sourceCountryCode, count(*)::BIGINT AS rowCount
   FROM read_parquet('__SNAPSHOT_DATA_DIRECTORY__/**/*.parquet', hive_partitioning = true)
+  WHERE regexp_full_match(sourceCountryCode, '^[A-Z]{2}$')
   GROUP BY sourceCountryCode
   ORDER BY sourceCountryCode
 ) TO '__ROW_COUNTS_PATH__' WITH (FORMAT JSON, ARRAY true);
+
+COPY (
+  SELECT divisionId, divisionAreaId, sourceCountryCode, geometry
+  FROM read_parquet('__SNAPSHOT_DATA_DIRECTORY__/**/*.parquet', hive_partitioning = true)
+  WHERE NOT coalesce(regexp_full_match(sourceCountryCode, '^[A-Z]{2}$'), false)
+  ORDER BY divisionId, divisionAreaId
+) TO '__UNRESOLVED_PATH__' WITH (FORMAT PARQUET, COMPRESSION ZSTD);
+
+COPY (
+  SELECT count(*)::BIGINT AS rowCount
+  FROM read_parquet('__UNRESOLVED_PATH__')
+) TO '__UNRESOLVED_COUNT_PATH__' WITH (FORMAT JSON, ARRAY true);

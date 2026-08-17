@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { TextDecoder, TextEncoder } from 'node:util';
@@ -23,7 +23,7 @@ async function temporaryDirectory() {
   return directory;
 }
 
-async function localSnapshot(directory, rowCounts) {
+async function localSnapshot(directory, rowCounts, metadataOverrides = {}) {
   const snapshotDir = path.join(directory, 'snapshot');
   await Promise.all([
     mkdir(path.join(snapshotDir, 'data'), { recursive: true }),
@@ -36,6 +36,8 @@ async function localSnapshot(directory, rowCounts) {
     sourceSnapshotSha256: 'a'.repeat(64),
     rowCounts,
     totalRowCount: Object.values(rowCounts).reduce((sum, count) => sum + count, 0),
+    unresolved: { rowCount: 0, byteSize: 128, sha256: 'b'.repeat(64) },
+    ...metadataOverrides,
   })}\n`, 'utf8');
   return snapshotDir;
 }
@@ -74,6 +76,28 @@ describe('fixed-release Overture extractor', () => {
     expect(overtureExtractor.createDivisionSnapshot).toBeTypeOf('function');
   });
 
+  it('refuses country extraction when unresolved snapshot evidence is missing or nonzero', async () => {
+    const directory = await temporaryDirectory();
+    const runner = async () => {
+      throw new Error('DuckDB must not run for an untrusted snapshot');
+    };
+
+    const missingContract = await localSnapshot(directory, { US: 1 }, { unresolved: undefined });
+    await expect(extractCountry({
+      release: '2026-06-17.0', country: 'US', snapshotDir: missingContract,
+      outputDir: path.join(directory, 'missing-output'), runner,
+    })).rejects.toThrow(/invalid unresolved evidence/);
+
+    const unresolvedDirectory = await temporaryDirectory();
+    const unresolvedSnapshot = await localSnapshot(unresolvedDirectory, { US: 1 }, {
+      unresolved: { rowCount: 1, byteSize: 128, sha256: 'b'.repeat(64) },
+    });
+    await expect(extractCountry({
+      release: '2026-06-17.0', country: 'US', snapshotDir: unresolvedSnapshot,
+      outputDir: path.join(unresolvedDirectory, 'unresolved-output'), runner,
+    })).rejects.toThrow(/snapshot has unresolved rows/);
+  });
+
   it('exposes separate snapshot and country CLI modes', () => {
     expect(overtureExtractor.parseCliArguments([
       'snapshot', '--release', '2026-06-17.0', '--snapshot', 'cache/release', '--source-manifest', 'source.json',
@@ -99,7 +123,13 @@ describe('fixed-release Overture extractor', () => {
       await writeFile(path.join(options.expectedDivisionMetadataDirectory, 'sourceCountryCode=MO', 'data.parquet'), 'parquet', 'utf8');
       await mkdir(path.join(options.expectedDataDirectory, 'sourceCountryCode=MO'), { recursive: true });
       await writeFile(path.join(options.expectedDataDirectory, 'sourceCountryCode=MO', 'data.parquet'), 'parquet', 'utf8');
+      await mkdir(path.join(options.expectedDataDirectory, 'sourceCountryCode=__HIVE_DEFAULT_PARTITION__'));
+      await writeFile(path.join(options.expectedDataDirectory, 'sourceCountryCode=__HIVE_DEFAULT_PARTITION__', 'data.parquet'), 'invalid', 'utf8');
+      await mkdir(path.join(options.expectedDataDirectory, 'sourceCountryCode=BAD'));
+      await writeFile(path.join(options.expectedDataDirectory, 'sourceCountryCode=BAD', 'data.parquet'), 'invalid', 'utf8');
       await writeFile(options.expectedRowCountsPath, '[{"sourceCountryCode":"MO","rowCount":2}]\n', 'utf8');
+      await writeFile(options.expectedUnresolvedPath, 'unresolved-parquet', 'utf8');
+      await writeFile(options.expectedUnresolvedCountPath, '[{"rowCount":1}]\n', 'utf8');
       return { exitCode: 0, stdout: '', stderr: '' };
     };
 
@@ -121,6 +151,10 @@ describe('fixed-release Overture extractor', () => {
     expect(sql.match(/PARTITION_BY \(sourceCountryCode\)/g)).toHaveLength(2);
     expect(sql).not.toMatch(/INNER\s+JOIN/i);
     expect(sql).not.toMatch(/CREATE\s+TEMP(?:ORARY)?\s+TABLE/i);
+    expect(sql).toContain('WHERE is_land = true');
+    expect(sql).toMatch(/WHERE regexp_full_match\(sourceCountryCode, '\^\[A-Z\]\{2\}\$'\)/);
+    expect(sql).toMatch(/WHERE NOT coalesce\(regexp_full_match\(sourceCountryCode, '\^\[A-Z\]\{2\}\$'\), false\)/);
+    expect(sql).toContain(`TO '${calls[1].options.expectedUnresolvedPath}'`);
     expect(sql).toContain(`TO '${calls[1].options.expectedDivisionMetadataDirectory}'`);
     expect(sql).toContain(`FROM read_parquet('${path.join(calls[1].options.expectedDataDirectory, '**', '*.parquet')}'`);
     const metadata = JSON.parse(await readFile(path.join(snapshotDir, 'metadata.json'), 'utf8'));
@@ -132,8 +166,14 @@ describe('fixed-release Overture extractor', () => {
       sourceSnapshotSha256: createHash('sha256').update(sourceBytes).digest('hex'),
       totalRowCount: 2,
       rowCounts: { MO: 2 },
+      unresolved: {
+        rowCount: 1,
+        byteSize: 18,
+        sha256: createHash('sha256').update('unresolved-parquet').digest('hex'),
+      },
     });
     expect(result.metadata).toEqual(metadata);
+    expect(await readdir(path.join(snapshotDir, 'data'))).toEqual(['sourceCountryCode=MO']);
     expect((await readdir(directory)).some((name) => name.includes('.partial'))).toBe(false);
   });
 
@@ -174,6 +214,8 @@ describe('fixed-release Overture extractor', () => {
         await mkdir(path.join(options.expectedDataDirectory, 'sourceCountryCode=MO'), { recursive: true });
         await writeFile(path.join(options.expectedDataDirectory, 'sourceCountryCode=MO', 'data.parquet'), 'fixture', 'utf8');
         await writeFile(options.expectedRowCountsPath, '[{"sourceCountryCode":"MO","rowCount":1},{"sourceCountryCode":"US","rowCount":1}]\n', 'utf8');
+        await writeFile(options.expectedUnresolvedPath, 'empty-parquet', 'utf8');
+        await writeFile(options.expectedUnresolvedCountPath, '[{"rowCount":0}]\n', 'utf8');
         return { exitCode: 0, stdout: '', stderr: '' };
       }
       sqlCalls.push(options.input);
@@ -207,6 +249,30 @@ describe('fixed-release Overture extractor', () => {
     await expect(overtureExtractor.createDivisionSnapshot({
       release: '2026-06-17.0', snapshotDir, sourceManifestPath, runner,
     })).rejects.toThrow(/snapshot failed.*remote join failed/);
+    expect((await readdir(directory)).sort()).toEqual(['source.json']);
+  });
+
+  it('rejects oversized unresolved evidence without leaving a partial snapshot', async () => {
+    const directory = await temporaryDirectory();
+    const snapshotDir = path.join(directory, 'snapshot');
+    const sourceManifestPath = path.join(directory, 'source.json');
+    await writeFile(sourceManifestPath, `${JSON.stringify(sourceManifest())}\n`, 'utf8');
+    const runner = async (_command, args, options) => {
+      if (args[0] === '-version') return { exitCode: 0, stdout: 'DuckDB v1.5.5', stderr: '' };
+      await mkdir(path.join(options.expectedDivisionMetadataDirectory, 'sourceCountryCode=MO'), { recursive: true });
+      await writeFile(path.join(options.expectedDivisionMetadataDirectory, 'sourceCountryCode=MO', 'data.parquet'), 'fixture');
+      await mkdir(path.join(options.expectedDataDirectory, 'sourceCountryCode=MO'), { recursive: true });
+      await writeFile(path.join(options.expectedDataDirectory, 'sourceCountryCode=MO', 'data.parquet'), 'fixture');
+      await writeFile(options.expectedRowCountsPath, '[{"sourceCountryCode":"MO","rowCount":1}]\n');
+      await writeFile(options.expectedUnresolvedPath, 'x');
+      await truncate(options.expectedUnresolvedPath, 64 * 1024 * 1024 + 1);
+      await writeFile(options.expectedUnresolvedCountPath, '[{"rowCount":1}]\n');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+
+    await expect(overtureExtractor.createDivisionSnapshot({
+      release: '2026-06-17.0', snapshotDir, sourceManifestPath, runner,
+    })).rejects.toThrow(/invalid unresolved data/);
     expect((await readdir(directory)).sort()).toEqual(['source.json']);
   });
 

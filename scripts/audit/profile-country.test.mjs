@@ -36,6 +36,7 @@ async function fixture(sourceCodes = ['CN', 'HK']) {
     sourceSnapshotSha256: 'a'.repeat(64),
     totalRowCount: Object.values(rowCounts).reduce((sum, count) => sum + count, 0),
     rowCounts,
+    unresolved: { rowCount: 0, byteSize: 128, sha256: 'b'.repeat(64) },
   })}\n`);
   return { root, snapshot, metadataRoot };
 }

@@ -204,8 +204,9 @@ async function readMetadata(metadataPath) {
 }
 
 function validateMetadata(metadata, parsed) {
-  const rootKeys = ['duckdbVersion', 'release', 'rowCounts', 'schema', 'schemaVersion', 'sourceSnapshotSha256', 'totalRowCount'];
+  const rootKeys = ['duckdbVersion', 'release', 'rowCounts', 'schema', 'schemaVersion', 'sourceSnapshotSha256', 'totalRowCount', 'unresolved'];
   const schemaKeys = ['format', 'partitionKey', 'version'];
+  const unresolvedKeys = ['byteSize', 'rowCount', 'sha256'];
   if (!isPlainObject(metadata) || Object.keys(metadata).sort().join(',') !== rootKeys.sort().join(',')
     || metadata.schemaVersion !== 1
     || !isPlainObject(metadata.schema) || metadata.schema.version !== 1
@@ -213,7 +214,12 @@ function validateMetadata(metadata, parsed) {
     || metadata.schema.format !== 'partitioned-parquet' || metadata.schema.partitionKey !== 'sourceCountryCode'
     || metadata.release !== parsed.release || typeof metadata.duckdbVersion !== 'string' || metadata.duckdbVersion.length < 1
     || typeof metadata.sourceSnapshotSha256 !== 'string' || !SHA256_PATTERN.test(metadata.sourceSnapshotSha256)
-    || !Number.isSafeInteger(metadata.totalRowCount) || metadata.totalRowCount < 1 || !isPlainObject(metadata.rowCounts)) {
+    || !Number.isSafeInteger(metadata.totalRowCount) || metadata.totalRowCount < 1 || !isPlainObject(metadata.rowCounts)
+    || !isPlainObject(metadata.unresolved)
+    || Object.keys(metadata.unresolved).sort().join(',') !== unresolvedKeys.sort().join(',')
+    || !Number.isSafeInteger(metadata.unresolved.rowCount) || metadata.unresolved.rowCount < 0
+    || !Number.isSafeInteger(metadata.unresolved.byteSize) || metadata.unresolved.byteSize < 1
+    || typeof metadata.unresolved.sha256 !== 'string' || !SHA256_PATTERN.test(metadata.unresolved.sha256)) {
     throw new ProfileError('SNAPSHOT_INVALID', 'snapshot');
   }
   let sum = 0;

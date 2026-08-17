@@ -1,4 +1,5 @@
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL, URL } from 'node:url';
@@ -12,6 +13,7 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const SOURCE_OBJECT_KEYS = new Set(['key', 'byteSize', 'etag', 'url', 'sha256']);
 const SQL_PATH = path.resolve(process.cwd(), 'scripts/audit/sql/extract-country.sql');
 const SNAPSHOT_SQL_PATH = path.resolve(process.cwd(), 'scripts/audit/sql/snapshot-divisions.sql');
+const MAX_UNRESOLVED_BYTES = 64 * 1024 * 1024;
 
 function escapedSqlPath(value) {
   return value.replaceAll("'", "''");
@@ -36,6 +38,24 @@ function validateCountry(country, label = 'country code') {
 
 function sqlString(value) {
   return `'${value.replaceAll("'", "''")}'`;
+}
+
+async function sha256File(filePath, maximumBytes) {
+  const info = await stat(filePath);
+  if (!info.isFile() || info.size < 1 || info.size > maximumBytes) {
+    throw new Error('DuckDB snapshot produced invalid unresolved data');
+  }
+  const hash = createHash('sha256');
+  let bytesRead = 0;
+  for await (const chunk of createReadStream(filePath)) {
+    bytesRead += chunk.byteLength;
+    if (!Number.isSafeInteger(bytesRead) || bytesRead > maximumBytes) {
+      throw new Error('DuckDB snapshot produced invalid unresolved data');
+    }
+    hash.update(chunk);
+  }
+  if (bytesRead !== info.size) throw new Error('DuckDB snapshot unresolved data changed while reading');
+  return { byteSize: info.size, sha256: hash.digest('hex') };
 }
 
 async function renderCountrySql({ sourceCountryCodes, snapshotDir, outputPath }) {
@@ -127,6 +147,8 @@ export async function createDivisionSnapshot({ release, snapshotDir, sourceManif
   const dataDir = path.join(stagingDir, 'data');
   const divisionMetadataDir = path.join(stagingDir, 'division-metadata');
   const rowCountsPath = path.join(stagingDir, 'row-counts.json');
+  const unresolvedPath = path.join(stagingDir, 'unresolved.parquet');
+  const unresolvedCountPath = path.join(stagingDir, 'unresolved-count.json');
   const tempDir = path.join(stagingDir, 'spill');
   try {
     await mkdir(dataDir, { recursive: true });
@@ -139,7 +161,9 @@ export async function createDivisionSnapshot({ release, snapshotDir, sourceManif
       .replace('__DIVISION_AREA_URL__', `${baseUrl}/type=division_area/*`)
       .replaceAll('__DIVISION_METADATA_DIRECTORY__', escapedSqlPath(divisionMetadataDir))
       .replaceAll('__SNAPSHOT_DATA_DIRECTORY__', escapedSqlPath(dataDir))
-      .replace('__ROW_COUNTS_PATH__', escapedSqlPath(rowCountsPath));
+      .replace('__ROW_COUNTS_PATH__', escapedSqlPath(rowCountsPath))
+      .replaceAll('__UNRESOLVED_PATH__', escapedSqlPath(unresolvedPath))
+      .replace('__UNRESOLVED_COUNT_PATH__', escapedSqlPath(unresolvedCountPath));
     const result = await runner(duckdbPath, [':memory:'], {
       shell: false,
       input: sql,
@@ -147,6 +171,8 @@ export async function createDivisionSnapshot({ release, snapshotDir, sourceManif
       expectedDataDirectory: dataDir,
       expectedDivisionMetadataDirectory: divisionMetadataDir,
       expectedRowCountsPath: rowCountsPath,
+      expectedUnresolvedPath: unresolvedPath,
+      expectedUnresolvedCountPath: unresolvedCountPath,
     });
     if (result.exitCode !== 0) {
       const detail = typeof result.stderr === 'string' ? result.stderr.trim() : '';
@@ -172,6 +198,20 @@ export async function createDivisionSnapshot({ release, snapshotDir, sourceManif
       totalRowCount += rowCount;
       if (!Number.isSafeInteger(totalRowCount)) throw new Error('DuckDB snapshot row count overflow');
     }
+    const rawUnresolvedCount = JSON.parse(await readFile(unresolvedCountPath, 'utf8'));
+    const unresolvedRowCount = Number(rawUnresolvedCount?.[0]?.rowCount);
+    if (!Array.isArray(rawUnresolvedCount) || rawUnresolvedCount.length !== 1
+      || !Number.isSafeInteger(unresolvedRowCount) || unresolvedRowCount < 0) {
+      throw new Error('DuckDB snapshot produced invalid unresolved row count');
+    }
+    const unresolvedFile = await sha256File(unresolvedPath, MAX_UNRESOLVED_BYTES);
+    const unresolved = {
+      rowCount: unresolvedRowCount,
+      ...unresolvedFile,
+    };
+    await Promise.all(dataEntries
+      .filter((entry) => !/^sourceCountryCode=[A-Z]{2}$/.test(entry))
+      .map((entry) => rm(path.join(dataDir, entry), { recursive: true, force: true })));
     const metadata = {
       schemaVersion: 1,
       schema: { version: 1, format: 'partitioned-parquet', partitionKey: 'sourceCountryCode' },
@@ -180,6 +220,7 @@ export async function createDivisionSnapshot({ release, snapshotDir, sourceManif
       sourceSnapshotSha256,
       totalRowCount,
       rowCounts,
+      unresolved,
     };
     await rm(tempDir, { recursive: true, force: true });
     await writeFile(path.join(stagingDir, 'metadata.json'), `${JSON.stringify(metadata, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
@@ -203,6 +244,14 @@ export async function extractCountry({ release, country, sourceCountryCodes = [c
   if (typeof runner !== 'function') throw new TypeError('runner must be a function');
   const snapshotMetadata = JSON.parse(await readFile(path.join(snapshotDir, 'metadata.json'), 'utf8'));
   if (snapshotMetadata?.schemaVersion !== 1 || snapshotMetadata.release !== release) throw new Error('local division snapshot does not match release');
+  const unresolved = snapshotMetadata.unresolved;
+  if (!unresolved || typeof unresolved !== 'object' || Array.isArray(unresolved)
+    || !Number.isSafeInteger(unresolved.rowCount) || unresolved.rowCount < 0
+    || !Number.isSafeInteger(unresolved.byteSize) || unresolved.byteSize < 1
+    || typeof unresolved.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(unresolved.sha256)) {
+    throw new Error('local division snapshot has invalid unresolved evidence');
+  }
+  if (unresolved.rowCount > 0) throw new Error('local division snapshot has unresolved rows');
   for (const code of uniqueSourceCodes) {
     if (!Number.isSafeInteger(snapshotMetadata.rowCounts?.[code]) || snapshotMetadata.rowCounts[code] < 1) {
       throw new Error(`local division snapshot has no rows for ${code}`);
