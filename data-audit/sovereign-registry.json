@@ -5771,7 +5771,9 @@
     {
       "sovereignCode": "PS",
       "sourceCountryCodes": [
-        "PS"
+        "PS",
+        "XG",
+        "XW"
       ],
       "productLevel": "pending-country-audit",
       "selectorVersion": 1,
@@ -5795,6 +5797,12 @@
           "url": "https://www.mfa.gov.cn/web/gjhdq_676201/",
           "retrievedOn": "2026-08-16",
           "license": "中华人民共和国外交部公开信息；仅用于审核目录与中文名称"
+        },
+        {
+          "title": "中国和阿拉伯国家关于巴勒斯坦问题的联合声明",
+          "url": "https://www.mfa.gov.cn/web/wjb_673085/zzjg_673183/xws_674681/xgxw_674683/202405/t20240531_11366712.shtml",
+          "retrievedOn": "2026-08-16",
+          "license": "中华人民共和国外交部公开声明；仅用于审核加沙地带和约旦河西岸的主权 owner"
         }
       ],
       "perspective": "overture-default",
@@ -6005,7 +6013,8 @@
     {
       "sovereignCode": "RS",
       "sourceCountryCodes": [
-        "RS"
+        "RS",
+        "XK"
       ],
       "productLevel": "pending-country-audit",
       "selectorVersion": 1,
@@ -6029,6 +6038,12 @@
           "url": "https://www.mfa.gov.cn/web/gjhdq_676201/gj_676203/oz_678770/",
           "retrievedOn": "2026-08-16",
           "license": "中华人民共和国外交部公开信息；仅用于审核目录与中文名称"
+        },
+        {
+          "title": "塞尔维亚总统武契奇会见王毅",
+          "url": "https://www.mfa.gov.cn/gjhdq_676201/gj_676203/oz_678770/1206_679642/xgxw_679648/202412/t20241218_11496047.shtml",
+          "retrievedOn": "2026-08-16",
+          "license": "中华人民共和国外交部公开信息；仅用于审核科索沃来源代码在中国官方视角下归入塞尔维亚"
         }
       ],
       "perspective": "overture-default",
@@ -6746,7 +6761,8 @@
     {
       "sovereignCode": "SY",
       "sourceCountryCodes": [
-        "SY"
+        "SY",
+        "XH"
       ],
       "productLevel": "pending-country-audit",
       "selectorVersion": 1,
@@ -6770,6 +6786,12 @@
           "url": "https://www.mfa.gov.cn/web/gjhdq_676201/",
           "retrievedOn": "2026-08-16",
           "license": "中华人民共和国外交部公开信息；仅用于审核目录与中文名称"
+        },
+        {
+          "title": "中华人民共和国和阿拉伯叙利亚共和国外交部长联合声明",
+          "url": "https://www.mfa.gov.cn/ziliao_674904/1179_674909/202511/t20251117_11754689.shtml",
+          "retrievedOn": "2026-08-16",
+          "license": "中华人民共和国外交部公开声明；仅用于审核戈兰高地来源代码归入叙利亚"
         }
       ],
       "perspective": "overture-default",
