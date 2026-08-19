@@ -31,7 +31,7 @@ const AUDIT_REGIONS = new Set<AuditRegion>([
 ]);
 const NON_SOVEREIGN_POLICIES = Object.freeze({
   antarctica: Object.freeze({ sourceCountryCodes: Object.freeze(['AQ']), worldGeometryIds: Object.freeze(['AQ']) }),
-  'bir-tawil': Object.freeze({ sourceCountryCodes: Object.freeze([]), worldGeometryIds: Object.freeze(['BRT']) }),
+  'bir-tawil': Object.freeze({ sourceCountryCodes: Object.freeze(['XT']), worldGeometryIds: Object.freeze(['BRT']) }),
   'brazilian-island': Object.freeze({ sourceCountryCodes: Object.freeze([]), worldGeometryIds: Object.freeze(['BRI']) }),
 });
 const PROTOTYPE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);

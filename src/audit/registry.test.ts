@@ -121,7 +121,7 @@ describe('loadAuditRegistry', () => {
     const input = validInput();
     input.nonSovereignExclusions.push({
       key: 'bir-tawil' as 'antarctica',
-      sourceCountryCodes: [] as unknown as string[],
+      sourceCountryCodes: ['XT'],
       worldGeometryIds: ['BRT'],
       reason: 'Natural Earth classifies this feature as indeterminate.',
       officialReferences: [structuredClone(reference)],

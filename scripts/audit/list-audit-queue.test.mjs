@@ -312,6 +312,7 @@ describe('checked-in sovereign baseline', () => {
     expect(owner.has('GS')).toBe(false);
     expect(owner.get('PR')).toBe('US');
     expect(owner.get('NC')).toBe('FR');
+    expect(owner.get('CP')).toBe('FR');
     expect(owner.get('GL')).toBe('DK');
     expect(owner.get('XE')).toBe('NL');
     expect(owner.get('XS')).toBe('NL');

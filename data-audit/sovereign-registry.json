@@ -22,7 +22,9 @@
     },
     {
       "key": "bir-tawil",
-      "sourceCountryCodes": [],
+      "sourceCountryCodes": [
+        "XT"
+      ],
       "worldGeometryIds": [
         "BRT"
       ],
@@ -2415,6 +2417,7 @@
       "sourceCountryCodes": [
         "FR",
         "BL",
+        "CP",
         "GF",
         "GP",
         "MF",
@@ -2458,6 +2461,12 @@
           "url": "https://www.insee.fr/fr/information/2560452",
           "retrievedOn": "2026-08-16",
           "license": "Licence Ouverte"
+        },
+        {
+          "title": "Loi n° 55-1052：Statut de l'Île de la Passion-Clipperton",
+          "url": "https://www.legifrance.gouv.fr/codes/section_lc/JORFTEXT000000879815/LEGISCTA000006087727/",
+          "retrievedOn": "2026-08-19",
+          "license": "Légifrance 公开法律；仅用于审核 Clipperton 来源代码归入法国"
         }
       ],
       "perspective": "overture-default",

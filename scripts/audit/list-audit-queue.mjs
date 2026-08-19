@@ -12,7 +12,7 @@ const CHINA_SOURCE_CODES = ['CN', 'HK', 'MO', 'TW'];
 const MAX_SNAPSHOT_METADATA_BYTES = 1024 * 1024;
 const NON_SOVEREIGN_POLICIES = Object.freeze({
   antarctica: Object.freeze({ sourceCountryCodes: ['AQ'], worldGeometryIds: ['AQ'] }),
-  'bir-tawil': Object.freeze({ sourceCountryCodes: [], worldGeometryIds: ['BRT'] }),
+  'bir-tawil': Object.freeze({ sourceCountryCodes: ['XT'], worldGeometryIds: ['BRT'] }),
   'brazilian-island': Object.freeze({ sourceCountryCodes: [], worldGeometryIds: ['BRI'] }),
 });
 
