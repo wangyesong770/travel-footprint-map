@@ -98,6 +98,42 @@ describe('fixed-release Overture extractor', () => {
     })).rejects.toThrow(/snapshot has unresolved rows/);
   });
 
+  it('extracts only exact reviewed unresolved pairs for the target sovereign country', async () => {
+    const directory = await temporaryDirectory();
+    const evidence = { rowCount: 1, byteSize: 128, sha256: 'b'.repeat(64) };
+    const snapshotDir = await localSnapshot(directory, { CN: 1 }, { unresolved: evidence });
+    await writeFile(path.join(snapshotDir, 'unresolved.parquet'), 'fixture', 'utf8');
+    const overrideDocument = {
+      schemaVersion: 1,
+      release: '2026-06-17.0',
+      unresolved: evidence,
+      overrides: [{
+        divisionId: '6ef6ba55-8e2d-4096-ac67-537311eee277',
+        divisionAreaId: '281a46b3-bdca-427e-9a5a-743985484b7e',
+        sovereignCode: 'CN',
+        rationale: 'Exact reviewed feature.',
+        officialReferences: [{ title: 'Official', url: 'https://example.gov/evidence', retrievedOn: '2026-08-19', license: 'Public' }],
+      }],
+    };
+    let extractionSql = '';
+    const runner = async (_command, args, options = {}) => {
+      if (args.includes('-version')) return { exitCode: 0, stdout: 'DuckDB v1.5.5', stderr: '' };
+      extractionSql = options.input;
+      await writeFile(options.expectedOutputPath, '{}\n', 'utf8');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+
+    await extractCountry({
+      release: '2026-06-17.0', country: 'CN', snapshotDir,
+      outputDir: path.join(directory, 'output'), runner, unresolvedOverrideDocument: overrideDocument,
+    });
+
+    expect(extractionSql).toContain("('6ef6ba55-8e2d-4096-ac67-537311eee277', '281a46b3-bdca-427e-9a5a-743985484b7e')");
+    expect(extractionSql).toContain("'CN' AS sourceCountryCode");
+    expect(extractionSql).toContain(path.join(snapshotDir, 'unresolved.parquet'));
+    expect(extractionSql).not.toMatch(/__[A-Z_]+__/);
+  });
+
   it('exposes separate snapshot and country CLI modes', () => {
     expect(overtureExtractor.parseCliArguments([
       'snapshot', '--release', '2026-06-17.0', '--snapshot', 'cache/release', '--source-manifest', 'source.json',
@@ -107,6 +143,18 @@ describe('fixed-release Overture extractor', () => {
     ])).toMatchObject({
       mode: 'country', release: '2026-06-17.0', country: 'CN', sourceCountryCodes: ['CN', 'HK', 'MO', 'TW'],
     });
+  });
+
+  it('loads the fixed reviewed override document for country CLI execution', async () => {
+    const overrideDocument = { schemaVersion: 1 };
+    let requestedPath = '';
+    const result = await overtureExtractor.runCliOperation({ mode: 'country', country: 'CN' }, {
+      readOverride: async (filePath) => { requestedPath = filePath; return overrideDocument; },
+      extract: async (options) => options,
+    });
+
+    expect(requestedPath).toBe(path.resolve('data-audit/unresolved-source-overrides.json'));
+    expect(result.unresolvedOverrideDocument).toBe(overrideDocument);
   });
 
   it('snapshots a fixed release once with bounded memory, spill storage, and source-bound metadata', async () => {

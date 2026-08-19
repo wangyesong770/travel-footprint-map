@@ -6,6 +6,7 @@ import { pathToFileURL, URL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 
 import { runProcess } from './lib/process-runner.mjs';
+import { validateUnresolvedOverrides } from './unresolved-overrides.mjs';
 
 const RELEASE_PATTERN = /^(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\.\d+$/;
 const COUNTRY_PATTERN = /^[A-Z]{2}$/;
@@ -58,12 +59,18 @@ async function sha256File(filePath, maximumBytes) {
   return { byteSize: info.size, sha256: hash.digest('hex') };
 }
 
-async function renderCountrySql({ sourceCountryCodes, snapshotDir, outputPath }) {
+async function renderCountrySql({ sourceCountryCodes, snapshotDir, outputPath, country, unresolvedOverrides }) {
   const template = await readFile(SQL_PATH, 'utf8');
+  const insert = unresolvedOverrides.length === 0 ? '' : `INSERT INTO reviewed_overrides VALUES ${unresolvedOverrides
+    .map(({ divisionId, divisionAreaId }) => `(${sqlString(divisionId)}, ${sqlString(divisionAreaId)})`).join(', ')};`;
   return template
     .replace('__SOURCE_COUNTRY_CODES__', `[${sourceCountryCodes.map(sqlString).join(', ')}]`)
     .replace('__SNAPSHOT_DATA_GLOB__', escapedSqlPath(path.join(snapshotDir, 'data', '**', '*.parquet')))
-    .replace('__DIVISION_METADATA_PATH__', escapedSqlPath(path.join(snapshotDir, 'division-metadata', '**', '*.parquet')))
+    .replaceAll('__DIVISION_METADATA_PATH__', escapedSqlPath(path.join(snapshotDir, 'division-metadata', '**', '*.parquet')))
+    .replaceAll('__UNRESOLVED_PATH__', escapedSqlPath(path.join(snapshotDir, 'unresolved.parquet')))
+    .replace('__OVERRIDE_INSERT__', insert)
+    .replaceAll('__OVERRIDE_COUNT__', String(unresolvedOverrides.length))
+    .replace('__OVERRIDE_COUNTRY__', sqlString(country))
     .replace('__OUTPUT_PATH__', escapedSqlPath(outputPath));
 }
 
@@ -232,7 +239,7 @@ export async function createDivisionSnapshot({ release, snapshotDir, sourceManif
   }
 }
 
-export async function extractCountry({ release, country, sourceCountryCodes = [country], snapshotDir, outputDir, runner = runProcess, duckdbPath = 'duckdb' }) {
+export async function extractCountry({ release, country, sourceCountryCodes = [country], snapshotDir, outputDir, runner = runProcess, duckdbPath = 'duckdb', unresolvedOverrideDocument }) {
   validateRelease(release);
   validateCountry(country);
   if (!Array.isArray(sourceCountryCodes) || sourceCountryCodes.length === 0 || sourceCountryCodes.length > 32) {
@@ -251,7 +258,12 @@ export async function extractCountry({ release, country, sourceCountryCodes = [c
     || typeof unresolved.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(unresolved.sha256)) {
     throw new Error('local division snapshot has invalid unresolved evidence');
   }
-  if (unresolved.rowCount > 0) throw new Error('local division snapshot has unresolved rows');
+  let reviewedOverrides = [];
+  if (unresolved.rowCount > 0) {
+    if (unresolvedOverrideDocument === undefined) throw new Error('local division snapshot has unresolved rows');
+    reviewedOverrides = validateUnresolvedOverrides(unresolvedOverrideDocument, release, unresolved).overrides
+      .filter(({ sovereignCode }) => sovereignCode === country);
+  }
   for (const code of uniqueSourceCodes) {
     if (!Number.isSafeInteger(snapshotMetadata.rowCounts?.[code]) || snapshotMetadata.rowCounts[code] < 1) {
       throw new Error(`local division snapshot has no rows for ${code}`);
@@ -263,7 +275,13 @@ export async function extractCountry({ release, country, sourceCountryCodes = [c
   const finalPath = path.join(outputDir, 'areas.geojsonseq');
   const temporaryPath = path.join(outputDir, `.areas.${randomUUID()}.partial`);
   try {
-    const sql = await renderCountrySql({ sourceCountryCodes: uniqueSourceCodes, snapshotDir, outputPath: temporaryPath });
+    const sql = await renderCountrySql({
+      sourceCountryCodes: uniqueSourceCodes,
+      snapshotDir,
+      outputPath: temporaryPath,
+      country,
+      unresolvedOverrides: reviewedOverrides,
+    });
     const result = await runner(duckdbPath, [':memory:'], {
       shell: false,
       input: sql,
@@ -328,10 +346,18 @@ export function parseCliArguments(argv) {
   };
 }
 
+export async function runCliOperation(options, dependencies = {}) {
+  const createSnapshot = dependencies.createSnapshot ?? createDivisionSnapshot;
+  const extract = dependencies.extract ?? extractCountry;
+  const readOverride = dependencies.readOverride ?? (async (filePath) => JSON.parse(await readFile(filePath, 'utf8')));
+  if (options.mode === 'snapshot') return createSnapshot(options);
+  const unresolvedOverrideDocument = await readOverride(path.resolve('data-audit/unresolved-source-overrides.json'));
+  return extract({ ...options, unresolvedOverrideDocument });
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const options = parseCliArguments(process.argv.slice(2));
-  const operation = options.mode === 'snapshot' ? createDivisionSnapshot : extractCountry;
-  operation(options).then((result) => {
+  runCliOperation(options).then((result) => {
     process.stdout.write(`${JSON.stringify(result)}\n`);
   }).catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : 'Overture extraction failed'}\n`);

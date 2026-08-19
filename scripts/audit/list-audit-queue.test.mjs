@@ -259,6 +259,35 @@ describe('snapshot-backed CLI input', () => {
     }
   });
 
+  it('accepts only an exact reviewed override set bound to unresolved snapshot evidence', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'audit-queue-'));
+    const evidence = { rowCount: 1, byteSize: 128, sha256: 'a'.repeat(64) };
+    const overrides = {
+      schemaVersion: 1,
+      release: '2026-06-17.0',
+      unresolved: evidence,
+      overrides: [{
+        divisionId: '6ef6ba55-8e2d-4096-ac67-537311eee277',
+        divisionAreaId: '281a46b3-bdca-427e-9a5a-743985484b7e',
+        sovereignCode: 'CN',
+        rationale: 'Exact reviewed feature.',
+        officialReferences: [{ title: 'Official', url: 'https://example.gov/evidence', retrievedOn: '2026-08-19', license: 'Public' }],
+      }],
+    };
+    try {
+      await writeFile(path.join(directory, 'metadata.json'), JSON.stringify({
+        schemaVersion: 1, release: '2026-06-17.0', rowCounts: { CN: 9 }, unresolved: evidence,
+      }));
+      await expect(readSnapshotSourceCodes(directory, '2026-06-17.0', overrides, new Set(['CN'])))
+        .resolves.toEqual(['CN']);
+      overrides.overrides[0].sovereignCode = 'ZZ';
+      await expect(readSnapshotSourceCodes(directory, '2026-06-17.0', overrides, new Set(['CN'])))
+        .rejects.toThrow(/^UNRESOLVED_OVERRIDE_INVALID$/);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('uses stable snapshot errors without leaking the supplied filesystem path', async () => {
     const secretPath = path.join(tmpdir(), 'private-user-name', 'missing-snapshot');
     await expect(readSnapshotSourceCodes(secretPath, '2026-06-17.0'))

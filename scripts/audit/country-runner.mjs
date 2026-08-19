@@ -4,6 +4,7 @@ import { constants as fsConstants } from 'node:fs';
 import { copyFile, lstat, mkdir, open, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
+import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
 import { buildCountryBoundaries, promoteDirectorySet } from '../build-country-boundaries.mjs';
@@ -17,7 +18,7 @@ import { runProcess } from './lib/process-runner.mjs';
 const FIXED_RELEASE = '2026-06-17.0';
 const COUNTRY = /^[A-Z]{2}$/;
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
-const MAX_EXTRACT_BYTES = 256 * 1024 * 1024;
+const MAX_EXTRACT_BYTES = 1024 * 1024 * 1024;
 const ATTRIBUTION = '© Overture Maps Foundation contributors; data available under ODbL 1.0';
 
 export async function runCountryAudit(args, options = {}) {
@@ -44,6 +45,7 @@ async function executeCountryAudit(args, options = {}) {
   let config;
   let selector;
   let exceptions;
+  let unresolvedOverrides;
   try {
     await assertSafeSnapshot(parsed.snapshotDir);
     registry = await readSafeJson(path.join(auditRoot, 'sovereign-registry.json'), 'registry');
@@ -57,9 +59,10 @@ async function executeCountryAudit(args, options = {}) {
       || config.sourceCountryCodes.some((code) => typeof code !== 'string' || !COUNTRY.test(code))) {
       return failure('REGISTRY_INVALID', parsed.country, parsed);
     }
-    [selector, exceptions] = await Promise.all([
+    [selector, exceptions, unresolvedOverrides] = await Promise.all([
       readSafeJson(path.join(auditRoot, 'selectors', `${parsed.country}.json`), 'selector'),
       readSafeJson(path.join(auditRoot, 'exceptions', `${parsed.country}.json`), 'exceptions'),
+      readSafeJson(path.join(auditRoot, 'unresolved-source-overrides.json'), 'unresolved-overrides'),
     ]);
     if (!selectorMatchesRegistry(selector, config, parsed)) {
       return failure('REGISTRY_SELECTOR_MISMATCH', parsed.country, parsed);
@@ -83,6 +86,7 @@ async function executeCountryAudit(args, options = {}) {
       sourceCountryCodes: config.sourceCountryCodes,
       snapshotDir: parsed.snapshotDir,
       outputDir: extractDir,
+      unresolvedOverrideDocument: unresolvedOverrides,
     });
   } catch {
     return failure('EXTRACTION_FAILED', 'local-snapshot', parsed);
@@ -266,27 +270,37 @@ async function readSafeJson(filePath, subject) {
   }
 }
 
-async function readGeoJsonSequence(filePath) {
-  const info = await lstat(filePath);
-  if (!info.isFile() || info.isSymbolicLink() || info.size < 2 || info.size > MAX_EXTRACT_BYTES) throw new Error('invalid extraction output');
-  const text = await readFile(filePath, 'utf8');
+export async function readGeoJsonSequence(filePath, { maximumBytes = MAX_EXTRACT_BYTES } = {}) {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 2 || maximumBytes > MAX_EXTRACT_BYTES) {
+    throw new Error('invalid extraction output');
+  }
+  const handle = await open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   const rows = [];
-  for (const line of text.split(/\r?\n/u)) {
-    if (line.length === 0) continue;
-    const feature = JSON.parse(line);
-    if (feature?.type !== 'Feature') throw new Error('invalid GeoJSONSeq feature');
-    rows.push({
-      divisionId: feature.properties?.divisionId,
-      divisionAreaId: feature.id ?? feature.properties?.divisionAreaId,
-      sourceCountryCode: feature.properties?.sourceCountryCode,
-      subtype: feature.properties?.subtype,
-      adminLevel: feature.properties?.adminLevel,
-      localType: feature.properties?.localType,
-      isLand: feature.properties?.isLand,
-      names: feature.properties?.names,
-      aliases: feature.properties?.aliases,
-      geometry: feature.geometry,
-    });
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size < 2 || info.size > maximumBytes) throw new Error('invalid extraction output');
+    const lines = createInterface({ input: handle.createReadStream({ autoClose: false }), crlfDelay: Infinity });
+    for await (const line of lines) {
+      if (line.length === 0) continue;
+      const feature = JSON.parse(line);
+      if (feature?.type !== 'Feature') throw new Error('invalid GeoJSONSeq feature');
+      rows.push({
+        divisionId: feature.properties?.divisionId,
+        divisionAreaId: feature.id ?? feature.properties?.divisionAreaId,
+        sourceCountryCode: feature.properties?.sourceCountryCode,
+        subtype: feature.properties?.subtype,
+        adminLevel: feature.properties?.adminLevel,
+        localType: feature.properties?.localType,
+        isLand: feature.properties?.isLand,
+        names: feature.properties?.names,
+        aliases: feature.properties?.aliases,
+        geometry: feature.geometry,
+      });
+    }
+    const finalInfo = await handle.stat();
+    if (finalInfo.size !== info.size) throw new Error('invalid extraction output');
+  } finally {
+    await handle.close();
   }
   if (rows.length === 0) throw new Error('empty extraction output');
   return rows;

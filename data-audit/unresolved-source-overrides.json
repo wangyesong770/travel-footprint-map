@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "release": "2026-06-17.0",
+  "unresolved": {
+    "rowCount": 2,
+    "byteSize": 17459,
+    "sha256": "bebb322874a39f51b811e39d4b84e007b3ad0ed28451fc5ee5edff3b36a6163a"
+  },
+  "overrides": [
+    {
+      "divisionId": "6ef6ba55-8e2d-4096-ac67-537311eee277",
+      "divisionAreaId": "281a46b3-bdca-427e-9a5a-743985484b7e",
+      "sovereignCode": "CN",
+      "rationale": "Overture 名称为中沙群岛的岛礁及其海域；中国政府标准地名与南海主权声明均将中沙群岛归入中国。仅覆盖此稳定 ID。",
+      "officialReferences": [
+        {
+          "title": "中国地名委员会受权公布我国南海诸岛部分标准地名",
+          "url": "https://www.mfa.gov.cn/web/wjb_673085/zzjg_673183/bjhysws_674671/bhflfg/dtdmxgfl/202303/P020230313585088793886.pdf",
+          "retrievedOn": "2026-08-19",
+          "license": "中华人民共和国外交部公开资料；仅用于稳定 ID 地名与群岛归属审核"
+        },
+        {
+          "title": "中华人民共和国政府关于在南海的领土主权和海洋权益的声明",
+          "url": "https://www.mfa.gov.cn/web/gjhdq_676201/gj_676203/yz_676205/1206_676452/1207_676464/201607/t20160712_7977739.shtml",
+          "retrievedOn": "2026-08-19",
+          "license": "中华人民共和国外交部公开声明；仅用于中国官方视角主权 owner 审核"
+        }
+      ]
+    },
+    {
+      "divisionId": "77cfc724-3d8c-4c48-8697-38c4582d7383",
+      "divisionAreaId": "3bd22b8a-9f15-4a9d-9f56-e5fa85da3f09",
+      "sovereignCode": "CN",
+      "rationale": "马来西亚官方水文资料的 Gugusan Beting Patinggi Ali 坐标与该几何一致；中国政府标准地名表将同一区域北康暗沙列入南沙群岛，中国政府声明南沙群岛属于中国。仅覆盖此稳定 ID。",
+      "officialReferences": [
+        {
+          "title": "Malaysian Notices to Mariners：Gugusan Beting Patinggi Ali",
+          "url": "https://hydro.gov.my/index.php/list-of-jd-download?catid=248&id=1749&m=0&task=download.send",
+          "retrievedOn": "2026-08-19",
+          "license": "马来西亚国家水文中心公开航海通告；仅用于稳定 ID 的地理同一性审核"
+        },
+        {
+          "title": "中国地名委员会受权公布我国南海诸岛部分标准地名",
+          "url": "https://www.mfa.gov.cn/web/wjb_673085/zzjg_673183/bjhysws_674671/bhflfg/dtdmxgfl/202303/P020230313585088793886.pdf",
+          "retrievedOn": "2026-08-19",
+          "license": "中华人民共和国外交部公开资料；仅用于北康暗沙与南沙群岛标准地名审核"
+        },
+        {
+          "title": "中华人民共和国政府关于在南海的领土主权和海洋权益的声明",
+          "url": "https://www.mfa.gov.cn/web/gjhdq_676201/gj_676203/yz_676205/1206_676452/1207_676464/201607/t20160712_7977739.shtml",
+          "retrievedOn": "2026-08-19",
+          "license": "中华人民共和国外交部公开声明；仅用于中国官方视角主权 owner 审核"
+        }
+      ]
+    }
+  ]
+}

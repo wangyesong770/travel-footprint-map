@@ -6,10 +6,22 @@ import path from 'node:path';
 import process from 'node:process';
 import { test } from 'vitest';
 
-import { promoteCountryArtifacts, runCountryAudit } from './country-runner.mjs';
+import { promoteCountryArtifacts, readGeoJsonSequence, runCountryAudit } from './country-runner.mjs';
 import { buildCountryBoundaries } from '../build-country-boundaries.mjs';
 
 const RELEASE = '2026-06-17.0';
+
+test('reads GeoJSONSeq through a bounded line stream', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'country-stream-'));
+  const filePath = path.join(root, 'areas.geojsonseq');
+  const feature = { type: 'Feature', properties: { divisionId: 'one' }, geometry: null };
+  try {
+    await writeFile(filePath, `${JSON.stringify(feature)}\n${JSON.stringify({ ...feature, properties: { divisionId: 'two' } })}\n`);
+    const rows = await readGeoJsonSequence(filePath, { maximumBytes: 1024 });
+    assert.deepEqual(rows.map(({ divisionId }) => divisionId), ['one', 'two']);
+    await assert.rejects(() => readGeoJsonSequence(filePath, { maximumBytes: 16 }), /invalid extraction output/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 async function fixture({ country = 'CN', status = 'verified', sourceCountryCodes = ['CN', 'HK', 'MO', 'TW'] } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'country-runner-'));
@@ -53,11 +65,17 @@ async function fixture({ country = 'CN', status = 'verified', sourceCountryCodes
     schemaVersion: 1, sovereignCode: country, release: RELEASE, status,
     exceptions: [], overlapExceptions: [],
   };
+  const unresolvedOverrides = {
+    schemaVersion: 1, release: RELEASE,
+    unresolved: { rowCount: 0, byteSize: 128, sha256: 'a'.repeat(64) },
+    overrides: [],
+  };
   await Promise.all([
     writeFile(path.join(root, 'data-audit', 'sovereign-registry.json'), JSON.stringify(registry)),
     writeFile(path.join(root, 'data-audit', 'selectors', `${country}.json`), JSON.stringify(selector)),
     writeFile(path.join(root, 'data-audit', 'exceptions', `${country}.json`), JSON.stringify(exceptions)),
-    writeFile(path.join(snapshotDir, 'metadata.json'), JSON.stringify({ schemaVersion: 1, release: RELEASE, rowCounts: Object.fromEntries(sourceCountryCodes.map((code) => [code, 1])) })),
+    writeFile(path.join(root, 'data-audit', 'unresolved-source-overrides.json'), JSON.stringify(unresolvedOverrides)),
+    writeFile(path.join(snapshotDir, 'metadata.json'), JSON.stringify({ schemaVersion: 1, release: RELEASE, rowCounts: Object.fromEntries(sourceCountryCodes.map((code) => [code, 1])), unresolved: unresolvedOverrides.unresolved })),
   ]);
   return { root, snapshotDir, country, registry, selector, exceptions };
 }
@@ -68,7 +86,7 @@ function dependencies(overrides = {}) {
     calls,
     deps: {
       async extractCountry(options) {
-        calls.push(['extract', options.sourceCountryCodes]);
+        calls.push(['extract', options.sourceCountryCodes, options.unresolvedOverrideDocument?.schemaVersion]);
         await mkdir(options.outputDir, { recursive: true });
         const feature = {
           type: 'Feature', id: 'area-capital',
@@ -144,6 +162,7 @@ test('runs the local-snapshot pipeline and promotes one verified country', async
     assert.deepEqual(result.result, { status: 'verified', countryCode: 'CN', release: RELEASE, featureCount: 1 });
     assert.deepEqual(calls.map(([name]) => name), ['extract', 'select', 'evidence', 'normalize', 'qa', 'build', 'promote']);
     assert.deepEqual(calls[0][1], ['CN', 'HK', 'MO', 'TW']);
+    assert.equal(calls[0][2], 1);
     assert.equal(await readFile(path.join(f.root, 'public/data/countries/CN.topojson'), 'utf8'), 'new-package');
   } finally { await rm(f.root, { recursive: true, force: true }); }
 });

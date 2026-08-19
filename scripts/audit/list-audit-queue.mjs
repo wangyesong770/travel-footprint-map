@@ -6,6 +6,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL, URL } from 'node:url';
 
+import { validateUnresolvedOverrides } from './unresolved-overrides.mjs';
+
 const ISO2 = /^[A-Z]{2}$/;
 const WORLD_ID = /^[A-Z0-9-]{2,4}$/;
 const CHINA_SOURCE_CODES = ['CN', 'HK', 'MO', 'TW'];
@@ -225,7 +227,7 @@ export function parseAuditQueueArguments(argv) {
   return { release, snapshotDir: path.resolve(snapshot) };
 }
 
-export async function readSnapshotSourceCodes(snapshotDir, release) {
+export async function readSnapshotSourceCodes(snapshotDir, release, overrideDocument, allowedSovereignCodes) {
   let file;
   try {
     file = await open(path.join(snapshotDir, 'metadata.json'), 'r');
@@ -265,7 +267,14 @@ export async function readSnapshotSourceCodes(snapshotDir, release) {
     || typeof unresolved.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(unresolved.sha256)) {
     throw new Error('SNAPSHOT_METADATA_INVALID');
   }
-  if (unresolved.rowCount > 0) throw new Error('SNAPSHOT_UNRESOLVED_ROWS');
+  if (unresolved.rowCount > 0) {
+    if (overrideDocument === undefined) throw new Error('SNAPSHOT_UNRESOLVED_ROWS');
+    const reviewed = validateUnresolvedOverrides(overrideDocument, release, unresolved);
+    if (!(allowedSovereignCodes instanceof Set)
+      || reviewed.overrides.some(({ sovereignCode }) => !allowedSovereignCodes.has(sovereignCode))) {
+      throw new Error('UNRESOLVED_OVERRIDE_INVALID');
+    }
+  }
   const codes = Object.keys(metadata.rowCounts).sort(compare);
   if (codes.length === 0) throw new Error('SNAPSHOT_METADATA_INVALID');
   for (const code of codes) {
@@ -279,11 +288,17 @@ export async function readSnapshotSourceCodes(snapshotDir, release) {
 async function main() {
   const { release, snapshotDir } = parseAuditQueueArguments(process.argv.slice(2));
   const registry = JSON.parse(await readFile('data-audit/sovereign-registry.json', 'utf8'));
+  const unresolvedOverrides = JSON.parse(await readFile('data-audit/unresolved-source-overrides.json', 'utf8'));
   const worldCountryIds = parseWorldMapIds(await readFile('src/generated/world-map.ts', 'utf8'));
   const selectorCodes = await artifactCodes('data-audit/selectors', '.json');
   const reportCodes = await artifactCodes(path.join('data-audit/reports', release), '.json');
   const packageCodes = await artifactCodes('public/data/countries', '.topojson');
-  const overtureSourceCodes = await readSnapshotSourceCodes(snapshotDir, release);
+  const overtureSourceCodes = await readSnapshotSourceCodes(
+    snapshotDir,
+    release,
+    unresolvedOverrides,
+    new Set(registry.countries.map(({ sovereignCode }) => sovereignCode)),
+  );
   const result = buildAuditQueue({
     registry,
     release,
