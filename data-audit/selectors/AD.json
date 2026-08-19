@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "release": "2026-06-17.0",
+  "sovereignCode": "AD",
+  "status": "verified",
+  "productLevel": "municipality-equivalent-parish",
+  "overtureSelector": {
+    "subtypes": ["region"],
+    "adminLevels": [1],
+    "localTypeRules": [
+      {
+        "field": "local_type",
+        "values": ["parish"]
+      }
+    ]
+  },
+  "expectedCount": {
+    "kind": "exact",
+    "value": 7,
+    "referenceIds": ["andorra-seven-parishes"]
+  },
+  "officialReferences": [
+    {
+      "id": "andorra-seven-parishes",
+      "publisher": "Govern d’Andorra",
+      "title": "Andorra en xifres 2024",
+      "url": "https://sig.govern.ad/SIGDDE.Public/Files/Documents/Publicacions/Andorra%20en%20xifres.%20Any%202024.pdf",
+      "capturedOn": "2026-08-19",
+      "effectiveOn": "2024-12-31",
+      "license": "安道尔政府公开统计出版物；仅用于核实七个 parish 的行政层级、名称与数量，不再分发原文",
+      "machineReadable": false
+    },
+    {
+      "id": "andorra-municipality-equivalence",
+      "publisher": "Govern d’Andorra",
+      "title": "Guia pràctica d’acollida per a persones nouvingudes",
+      "url": "https://www.govern.ad/documents/d/guest/guia-practica-d-acollida-per-a-persones-nouvingudes-1?download=true",
+      "capturedOn": "2026-08-19",
+      "effectiveOn": "2026-07-01",
+      "license": "安道尔政府公开指南；仅用于核实 parish 等同其他国家 municipality 的制度口径，不再分发原文",
+      "machineReadable": false
+    }
+  ],
+  "allowlist": [],
+  "denylist": [],
+  "sampleApplicability": {
+    "border": {
+      "applicable": true,
+      "reason": "安道尔为内陆国，外缘 parish 与法国或西班牙接壤；以 Canillo 作为边境 parish 样本。"
+    },
+    "coastal": {
+      "applicable": false,
+      "reason": "安道尔为内陆国，不存在沿海 parish。"
+    },
+    "specialCaseCategories": []
+  },
+  "samples": [
+    {
+      "category": "capital",
+      "institutionalCategory": "parish",
+      "divisionId": "6f76dcc3-3fc8-4f47-8cd9-d5084bcafc3f",
+      "expectedInclusion": true,
+      "referenceIds": ["andorra-seven-parishes"]
+    },
+    {
+      "category": "ordinary",
+      "institutionalCategory": "parish",
+      "divisionId": "71e72b37-db4e-4671-a3df-27fcbb70e77a",
+      "expectedInclusion": true,
+      "referenceIds": ["andorra-seven-parishes"]
+    },
+    {
+      "category": "small-rural",
+      "institutionalCategory": "parish",
+      "divisionId": "ae2579a4-ceaf-47ca-b6df-5c51debc276b",
+      "expectedInclusion": true,
+      "referenceIds": ["andorra-seven-parishes"]
+    },
+    {
+      "category": "border",
+      "institutionalCategory": "parish",
+      "divisionId": "c5cf03e2-e677-43cc-a1d1-15fc4c71a422",
+      "expectedInclusion": true,
+      "referenceIds": ["andorra-seven-parishes"]
+    }
+  ]
+}

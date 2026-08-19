@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -250,8 +253,26 @@ describe('loadAuditRegistry', () => {
 });
 
 describe('production audit registry', () => {
-  it('contains no verified seed country before package evidence is integrated', () => {
-    expect(auditRegistry.worldEntries.filter((entry) => entry.status === 'verified')).toEqual([]);
+  it('exposes only countries whose checked-in package and report bind to the registry', () => {
+    const verified = auditRegistry.worldEntries.filter((entry) => entry.status === 'verified');
+    expect(verified.map(({ sovereignCode }) => sovereignCode)).toEqual(['AD']);
+    expect(verified[0]).toMatchObject({
+      productLevel: 'municipality-equivalent-parish',
+      expectedCount: { minimum: 7, maximum: 7 },
+    });
+
+    const manifest = JSON.parse(readFileSync('public/data/countries/manifest.json', 'utf8')) as Record<string, {
+      checksum: string;
+      featureCount: number;
+    }>;
+    const report = JSON.parse(readFileSync('data-audit/reports/2026-06-17.0/AD.json', 'utf8')) as {
+      packageChecksum: string;
+      status: string;
+    };
+    const packageBytes = readFileSync('public/data/countries/AD.topojson');
+    const packageChecksum = createHash('sha256').update(packageBytes).digest('hex');
+    expect(manifest['AD']).toMatchObject({ checksum: packageChecksum, featureCount: 7 });
+    expect(report).toMatchObject({ packageChecksum, status: 'verified' });
   });
 
   it('assigns CN, HK, MO and TW to China without independent world entries', () => {
