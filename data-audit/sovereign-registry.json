@@ -4106,21 +4106,30 @@
       "sourceCountryCodes": [
         "LI"
       ],
-      "productLevel": "pending-country-audit",
+      "productLevel": "municipality",
       "selectorVersion": 1,
       "overtureSelector": {
         "subtypes": [
-          "__audit_pending__"
+          "region"
         ],
-        "adminLevels": [],
-        "localTypeRules": []
+        "adminLevels": [
+          1
+        ],
+        "localTypeRules": [
+          {
+            "field": "local_type",
+            "values": [
+              "municipality"
+            ]
+          }
+        ]
       },
       "allowlist": [],
       "denylist": [],
       "expectedCount": {
-        "minimum": 0,
-        "maximum": 0,
-        "referenceDate": "2026-08-16"
+        "minimum": 11,
+        "maximum": 11,
+        "referenceDate": "2026-06-17"
       },
       "officialReferences": [
         {
@@ -4128,11 +4137,17 @@
           "url": "https://www.mfa.gov.cn/web/gjhdq_676201/gj_676203/oz_678770/",
           "retrievedOn": "2026-08-16",
           "license": "中华人民共和国外交部公开信息；仅用于审核目录与中文名称"
+        },
+        {
+          "title": "Regierung des Fürstentums Liechtenstein: Das Fürstentum",
+          "url": "https://www.regierung.li/files/attachments/20250225-broschuere-digitale-version-final-doppelseiten.pdf",
+          "retrievedOn": "2026-08-19",
+          "license": "列支敦士登政府公开出版物；仅用于核实十一 municipality 的制度层级、名称与数量"
         }
       ],
       "perspective": "overture-default",
-      "auditedAt": "2026-08-16",
-      "status": "draft",
+      "auditedAt": "2026-08-19",
+      "status": "verified",
       "nameZh": "列支敦士登",
       "nameLocal": "Liechtenstein",
       "auditRegion": "europe",

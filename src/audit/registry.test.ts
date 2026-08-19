@@ -255,24 +255,30 @@ describe('loadAuditRegistry', () => {
 describe('production audit registry', () => {
   it('exposes only countries whose checked-in package and report bind to the registry', () => {
     const verified = auditRegistry.worldEntries.filter((entry) => entry.status === 'verified');
-    expect(verified.map(({ sovereignCode }) => sovereignCode)).toEqual(['AD']);
+    expect(verified.map(({ sovereignCode }) => sovereignCode)).toEqual(['AD', 'LI']);
     expect(verified[0]).toMatchObject({
       productLevel: 'municipality-equivalent-parish',
       expectedCount: { minimum: 7, maximum: 7 },
+    });
+    expect(verified[1]).toMatchObject({
+      productLevel: 'municipality',
+      expectedCount: { minimum: 11, maximum: 11 },
     });
 
     const manifest = JSON.parse(readFileSync('public/data/countries/manifest.json', 'utf8')) as Record<string, {
       checksum: string;
       featureCount: number;
     }>;
-    const report = JSON.parse(readFileSync('data-audit/reports/2026-06-17.0/AD.json', 'utf8')) as {
-      packageChecksum: string;
-      status: string;
-    };
-    const packageBytes = readFileSync('public/data/countries/AD.topojson');
-    const packageChecksum = createHash('sha256').update(packageBytes).digest('hex');
-    expect(manifest['AD']).toMatchObject({ checksum: packageChecksum, featureCount: 7 });
-    expect(report).toMatchObject({ packageChecksum, status: 'verified' });
+    for (const [countryCode, featureCount] of [['AD', 7], ['LI', 11]] as const) {
+      const report = JSON.parse(readFileSync(`data-audit/reports/2026-06-17.0/${countryCode}.json`, 'utf8')) as {
+        packageChecksum: string;
+        status: string;
+      };
+      const packageBytes = readFileSync(`public/data/countries/${countryCode}.topojson`);
+      const packageChecksum = createHash('sha256').update(packageBytes).digest('hex');
+      expect(manifest[countryCode]).toMatchObject({ checksum: packageChecksum, featureCount });
+      expect(report).toMatchObject({ packageChecksum, status: 'verified' });
+    }
   });
 
   it('assigns CN, HK, MO and TW to China without independent world entries', () => {

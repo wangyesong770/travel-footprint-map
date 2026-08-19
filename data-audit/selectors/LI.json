@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "release": "2026-06-17.0",
+  "sovereignCode": "LI",
+  "status": "verified",
+  "productLevel": "municipality",
+  "overtureSelector": {
+    "subtypes": ["region"],
+    "adminLevels": [1],
+    "localTypeRules": [
+      {
+        "field": "local_type",
+        "values": ["municipality"]
+      }
+    ]
+  },
+  "expectedCount": {
+    "kind": "exact",
+    "value": 11,
+    "referenceIds": ["liechtenstein-eleven-municipalities"]
+  },
+  "officialReferences": [
+    {
+      "id": "liechtenstein-eleven-municipalities",
+      "publisher": "Regierung des Fürstentums Liechtenstein",
+      "title": "Das Fürstentum",
+      "url": "https://www.regierung.li/files/attachments/20250225-broschuere-digitale-version-final-doppelseiten.pdf",
+      "capturedOn": "2026-08-19",
+      "effectiveOn": "2025-02-25",
+      "license": "列支敦士登政府公开出版物；仅用于核实十一 municipality 的制度层级、名称与数量，不再分发原文",
+      "machineReadable": false
+    }
+  ],
+  "allowlist": [],
+  "denylist": [],
+  "sampleApplicability": {
+    "border": {
+      "applicable": true,
+      "reason": "列支敦士登为内陆国，以 Ruggell 作为外部国界 municipality 样本。"
+    },
+    "coastal": {
+      "applicable": false,
+      "reason": "列支敦士登为内陆国，不存在沿海 municipality。"
+    },
+    "specialCaseCategories": []
+  },
+  "samples": [
+    {
+      "category": "capital",
+      "institutionalCategory": "municipality",
+      "divisionId": "e4abcabe-834b-49ec-a18e-df6d29e861fa",
+      "expectedInclusion": true,
+      "referenceIds": ["liechtenstein-eleven-municipalities"]
+    },
+    {
+      "category": "ordinary",
+      "institutionalCategory": "municipality",
+      "divisionId": "3d1f78ca-9613-4072-8aa5-41d38b342b10",
+      "expectedInclusion": true,
+      "referenceIds": ["liechtenstein-eleven-municipalities"]
+    },
+    {
+      "category": "small-rural",
+      "institutionalCategory": "municipality",
+      "divisionId": "9a9d6908-c929-429d-b05c-762041cf40eb",
+      "expectedInclusion": true,
+      "referenceIds": ["liechtenstein-eleven-municipalities"]
+    },
+    {
+      "category": "border",
+      "institutionalCategory": "municipality",
+      "divisionId": "e11fefa2-b1dd-42c5-9284-7c328700ef37",
+      "expectedInclusion": true,
+      "referenceIds": ["liechtenstein-eleven-municipalities"]
+    }
+  ]
+}
