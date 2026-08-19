@@ -19,7 +19,7 @@ const FIXED_RELEASE = '2026-06-17.0';
 const COUNTRY = /^[A-Z]{2}$/;
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
 const MAX_EXTRACT_BYTES = 1024 * 1024 * 1024;
-const ATTRIBUTION = '© Overture Maps Foundation contributors; data available under ODbL 1.0';
+const ATTRIBUTION = '© OpenStreetMap contributors, Overture Maps Foundation · ODbL 1.0';
 
 export async function runCountryAudit(args, options = {}) {
   try {

@@ -293,6 +293,9 @@ test('default adapters build a third registry country instead of failing the leg
     const manifest = JSON.parse(await readFile(path.join(f.root, 'public/data/countries/manifest.json'), 'utf8'));
     assert.equal(manifest.AD.administrativeScheme, 'municipality-equivalent-parish');
     assert.equal(manifest.AD.featureCount, 1);
+    assert.match(manifest.AD.attribution, /OpenStreetMap contributors/u);
+    assert.match(manifest.AD.attribution, /Overture Maps Foundation/u);
+    assert.match(manifest.AD.attribution, /ODbL 1\.0/u);
   } finally { await rm(f.root, { recursive: true, force: true }); }
 });
 
