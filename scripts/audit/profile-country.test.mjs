@@ -86,7 +86,22 @@ describe('read-only country profile', () => {
     expect(sql).toContain(path.join(f.metadataRoot, 'sourceCountryCode=HK', 'data_0.parquet'));
     expect(sql).not.toContain(path.join(f.snapshot, 'data'));
     expect(sql).not.toMatch(/geometry|https?:|s3:|\bINSTALL\b|\bLOAD\b/i);
+    expect(sql).toContain("map_extract_value(localType, 'en') AS localType");
     expect(calls[0].options.maxOutputBytes).toBeLessThanOrEqual(1024 * 1024);
+  });
+
+  it('profiles a sovereign entry represented only by reviewed upstream alias codes', async () => {
+    const f = await fixture(['XG', 'XW']);
+    const rows = [
+      { sourceCountryCode: 'XG', subtype: 'region', adminLevel: 1, localType: 'governorate', count: 5, namedCount: 5 },
+      { sourceCountryCode: 'XW', subtype: 'region', adminLevel: 1, localType: 'governorate', count: 11, namedCount: 11 },
+    ];
+    const output = await profileCountry([
+      '--country', 'PS', '--release', RELEASE, '--snapshot', f.snapshot, '--source-codes', 'XG,XW',
+    ], { runner: async () => ({ exitCode: 0, stdout: JSON.stringify(rows), stderr: '' }) });
+
+    expect(output.exitCode).toBe(0);
+    expect(output.result).toMatchObject({ countryCode: 'PS', sourceCountryCodes: ['XG', 'XW'], totalCount: 16 });
   });
 
   it('strictly rejects unsupported, duplicate, malformed, and output-path arguments before DuckDB', async () => {

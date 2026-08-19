@@ -386,6 +386,7 @@ writeFileSync(match[1], '{"type":"Feature"}\\n');
     expect(sql).toContain(path.join(snapshotDir, 'division-metadata'));
     expect(sql).toContain("SET VARIABLE source_country_codes = ['CN', 'HK', 'MO', 'TW']");
     expect(sql).toMatch(/true\s+AS\s+isLand/i);
+    expect(sql).toContain("map_extract_value(division.localType, 'en') AS localType");
     expect(sql).toMatch(/ORDER BY\s+(?:area\.)?divisionId/i);
     expect(await readFile(result.outputPath, 'utf8')).toBe('{"type":"Feature"}\n');
     expect(result.duckdbVersion).toBe('DuckDB v1.4.0');

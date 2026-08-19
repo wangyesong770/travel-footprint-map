@@ -106,8 +106,7 @@ function parseArguments(args) {
   const sourceCountryCodes = values.sourceCodes?.split(',') ?? [];
   if (sourceCountryCodes.length < 1 || sourceCountryCodes.length > 32
     || sourceCountryCodes.some((code) => !COUNTRY_PATTERN.test(code))
-    || new Set(sourceCountryCodes).size !== sourceCountryCodes.length
-    || !sourceCountryCodes.includes(values.country)) {
+    || new Set(sourceCountryCodes).size !== sourceCountryCodes.length) {
     throw new Error('invalid arguments');
   }
   return {
@@ -235,7 +234,7 @@ function validateMetadata(metadata, parsed) {
 
 function renderSql(parquetPaths) {
   const files = parquetPaths.map((filePath) => `'${filePath.replaceAll("'", "''")}'`).join(', ');
-  return `SET memory_limit = '256MB';\nSET threads = 1;\nSET preserve_insertion_order = false;\nSELECT\n  sourceCountryCode,\n  subtype,\n  adminLevel,\n  localType,\n  count(*)::BIGINT AS count,\n  count(*) FILTER (WHERE names.primary IS NOT NULL AND length(trim(names.primary)) > 0)::BIGINT AS namedCount\nFROM read_parquet([${files}], hive_partitioning = true)\nGROUP BY sourceCountryCode, subtype, adminLevel, localType\nORDER BY sourceCountryCode, subtype NULLS FIRST, adminLevel NULLS FIRST, localType NULLS FIRST;\n`;
+  return `SET memory_limit = '256MB';\nSET threads = 1;\nSET preserve_insertion_order = false;\nSELECT\n  sourceCountryCode,\n  subtype,\n  adminLevel,\n  map_extract_value(localType, 'en') AS localType,\n  count(*)::BIGINT AS count,\n  count(*) FILTER (WHERE names.primary IS NOT NULL AND length(trim(names.primary)) > 0)::BIGINT AS namedCount\nFROM read_parquet([${files}], hive_partitioning = true)\nGROUP BY sourceCountryCode, subtype, adminLevel, map_extract_value(localType, 'en')\nORDER BY sourceCountryCode, subtype NULLS FIRST, adminLevel NULLS FIRST, localType NULLS FIRST;\n`;
 }
 
 function validateRows(rows, expectedCodes) {
