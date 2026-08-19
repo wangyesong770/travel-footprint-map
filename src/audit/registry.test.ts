@@ -75,6 +75,16 @@ describe('loadAuditRegistry', () => {
     expect(() => loadAuditRegistry(input)).toThrowError(/DUPLICATE_SOURCE_CODE/);
   });
 
+  it('allows a sovereign entry represented only by reviewed upstream alias codes', () => {
+    const input = validInput();
+    input.countries[0]!.sourceCountryCodes = ['XB'];
+
+    const loaded = loadAuditRegistry(input);
+
+    expect(loaded.worldEntries[0]?.sovereignCode).toBe('AA');
+    expect(loaded.worldEntries[0]?.sourceCountryCodes).toEqual(['XB']);
+  });
+
   it('rejects selectors without an effective predicate', () => {
     const input = validInput();
     input.countries[0]!.overtureSelector = {

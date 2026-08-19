@@ -1514,7 +1514,12 @@
         "CN",
         "HK",
         "MO",
-        "TW"
+        "TW",
+        "XC",
+        "XD",
+        "XP",
+        "XR",
+        "XX"
       ],
       "productLevel": "prefecture",
       "selectorVersion": 1,
@@ -1553,6 +1558,18 @@
           "url": "https://www.mfa.gov.cn/web/ziliao_674904/1179_674909/200902/t20090218_7947208.shtml",
           "retrievedOn": "2026-08-16",
           "license": "中华人民共和国外交部公开信息；仅用于中国官方视角世界几何归属审核"
+        },
+        {
+          "title": "中华人民共和国政府关于在南海的领土主权和海洋权益的声明",
+          "url": "https://www.mfa.gov.cn/web/ziliao_674904/1179_674909/201607/t20160712_7947696.shtml",
+          "retrievedOn": "2026-08-16",
+          "license": "中华人民共和国外交部公开声明；仅用于审核西沙、中沙、南沙相关来源代码归入中国"
+        },
+        {
+          "title": "中华人民共和国政府对于中印边界问题的声明",
+          "url": "https://www.gov.cn/gongbao/shuju/1962/gwyb196214.pdf",
+          "retrievedOn": "2026-08-16",
+          "license": "中华人民共和国国务院公报；仅用于审核巴里加斯与巨哇—曲惹相关来源代码归入中国"
         }
       ],
       "perspective": "china-official",
@@ -5771,7 +5788,6 @@
     {
       "sovereignCode": "PS",
       "sourceCountryCodes": [
-        "PS",
         "XG",
         "XW"
       ],

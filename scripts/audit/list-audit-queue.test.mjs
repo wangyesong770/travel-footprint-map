@@ -306,6 +306,7 @@ describe('checked-in sovereign baseline', () => {
     }
 
     expect(['CN', 'HK', 'MO', 'TW'].map((code) => owner.get(code))).toEqual(['CN', 'CN', 'CN', 'CN']);
+    expect(['XC', 'XD', 'XP', 'XR', 'XX'].map((code) => owner.get(code))).toEqual(['CN', 'CN', 'CN', 'CN', 'CN']);
     expect(owner.get('IO')).toBe('GB');
     expect(owner.get('FK')).toBe('AR');
     expect(owner.has('GS')).toBe(false);
@@ -317,6 +318,7 @@ describe('checked-in sovereign baseline', () => {
     expect(owner.get('XJ')).toBe('NO');
     expect(owner.get('XG')).toBe('PS');
     expect(owner.get('XW')).toBe('PS');
+    expect(owner.has('PS')).toBe(false);
     expect(owner.get('XH')).toBe('SY');
     expect(owner.get('XK')).toBe('RS');
     expect(owner.get('CK')).toBe('CK');

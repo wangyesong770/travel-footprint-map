@@ -304,7 +304,7 @@ const readCountry = (value: unknown): CountryAuditConfig => {
     countryCodes: true,
     duplicateSourceCode: true,
   }) as readonly CountryCode[];
-  if (sourceCountryCodes.length === 0 || !sourceCountryCodes.includes(sovereignCode)) {
+  if (sourceCountryCodes.length === 0) {
     return fail('INVALID_CONFIG');
   }
   if (
