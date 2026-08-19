@@ -284,16 +284,20 @@ export async function readGeoJsonSequence(filePath, { maximumBytes = MAX_EXTRACT
       if (line.length === 0) continue;
       const feature = JSON.parse(line);
       if (feature?.type !== 'Feature') throw new Error('invalid GeoJSONSeq feature');
+      const properties = feature.properties;
       rows.push({
-        divisionId: feature.properties?.divisionId,
-        divisionAreaId: feature.id ?? feature.properties?.divisionAreaId,
-        sourceCountryCode: feature.properties?.sourceCountryCode,
-        subtype: feature.properties?.subtype,
-        adminLevel: feature.properties?.adminLevel,
-        localType: feature.properties?.localType,
-        isLand: feature.properties?.isLand,
-        names: feature.properties?.names,
-        aliases: feature.properties?.aliases,
+        divisionId: properties?.divisionId,
+        divisionAreaId: feature.id ?? properties?.divisionAreaId,
+        sourceCountryCode: properties?.sourceCountryCode,
+        subtype: properties?.subtype,
+        adminLevel: properties?.adminLevel,
+        localType: properties?.localType,
+        isLand: properties?.isLand,
+        names: properties?.names ?? {
+          primary: properties?.['names.primary'],
+          common: properties?.['names.common'],
+        },
+        aliases: properties?.aliases,
         geometry: feature.geometry,
       });
     }
@@ -323,7 +327,7 @@ function toBuilderCollection(selected, parsed, retrievedAt) {
         // source code (including reviewed territory consolidation such as HK/MO/TW -> CN)
         // while the package country remains the sovereign owner.
         divisionId: row.divisionId, sourceCountryCode: row.sourceCountryCode,
-        country: parsed.country, subtype: row.productLevel, adminLevel: row.adminLevel,
+        country: parsed.country, subtype: row.subtype, adminLevel: row.adminLevel,
         localType: row.localType, isLand: true, names: row.names, aliases: row.aliases,
       },
       geometry: row.geometry,
@@ -332,7 +336,8 @@ function toBuilderCollection(selected, parsed, retrievedAt) {
 }
 
 function defaultNormalizeSelected(selected, config, release) {
-  const raw = toBuilderCollection(selected, { country: config.sovereignCode, release }, new Date().toISOString().slice(0, 10));
+  const productRows = selected.map((row) => ({ ...row, subtype: row.productLevel }));
+  const raw = toBuilderCollection(productRows, { country: config.sovereignCode, release }, new Date().toISOString().slice(0, 10));
   return normalizeFeatureCollection(raw, config.sovereignCode, { acceptedLevels: [config.productLevel] });
 }
 

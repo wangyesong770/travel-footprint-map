@@ -23,6 +23,25 @@ test('reads GeoJSONSeq through a bounded line stream', async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test('reconstructs names flattened by the DuckDB GDAL GeoJSONSeq writer', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'country-flattened-names-'));
+  const filePath = path.join(root, 'areas.geojsonseq');
+  const feature = {
+    type: 'Feature',
+    properties: {
+      divisionId: 'parish-one',
+      'names.primary': 'Canillo',
+      'names.common': { ca: 'Canillo', zh: '卡尼略' },
+    },
+    geometry: null,
+  };
+  try {
+    await writeFile(filePath, `${JSON.stringify(feature)}\n`);
+    const [row] = await readGeoJsonSequence(filePath, { maximumBytes: 4096 });
+    assert.deepEqual(row.names, { primary: 'Canillo', common: { ca: 'Canillo', zh: '卡尼略' } });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 async function fixture({ country = 'CN', status = 'verified', sourceCountryCodes = ['CN', 'HK', 'MO', 'TW'] } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'country-runner-'));
   const snapshotDir = path.join(root, 'snapshot');
@@ -238,11 +257,11 @@ test('default adapters build a third registry country instead of failing the leg
   const f = await fixture({ country: 'AD', sourceCountryCodes: ['AD'] });
   f.registry.countries[0].nameZh = '安道尔';
   f.registry.countries[0].nameLocal = 'Andorra';
-  f.registry.countries[0].productLevel = 'parish';
-  f.registry.countries[0].overtureSelector = { subtypes: ['parish'], adminLevels: [], localTypeRules: [] };
+  f.registry.countries[0].productLevel = 'municipality-equivalent-parish';
+  f.registry.countries[0].overtureSelector = { subtypes: ['region'], adminLevels: [1], localTypeRules: [] };
   f.registry.countries[0].expectedCount = { minimum: 1, maximum: 1 };
-  f.selector.productLevel = 'parish';
-  f.selector.overtureSelector.subtypes = ['parish'];
+  f.selector.productLevel = 'municipality-equivalent-parish';
+  f.selector.overtureSelector = { subtypes: ['region'], adminLevels: [1], localTypeRules: [] };
   await Promise.all([
     writeFile(path.join(f.root, 'data-audit/sovereign-registry.json'), JSON.stringify(f.registry)),
     writeFile(path.join(f.root, 'data-audit/selectors/AD.json'), JSON.stringify(f.selector)),
@@ -251,7 +270,7 @@ test('default adapters build a third registry country instead of failing the leg
   const extractCountry = async (options) => {
     const result = await fake(options);
     const feature = JSON.parse((await readFile(result.outputPath, 'utf8')).trim());
-    feature.properties.subtype = 'parish';
+    feature.properties.subtype = 'region';
     feature.properties.adminLevel = 1;
     feature.properties.sourceCountryCode = 'AD';
     feature.properties.names = { primary: 'Canillo', common: { zh: '卡尼略' } };
@@ -272,7 +291,7 @@ test('default adapters build a third registry country instead of failing the leg
     });
     assert.equal(result.exitCode, 0, builderError?.message ?? JSON.stringify(result.result));
     const manifest = JSON.parse(await readFile(path.join(f.root, 'public/data/countries/manifest.json'), 'utf8'));
-    assert.equal(manifest.AD.administrativeScheme, 'parish');
+    assert.equal(manifest.AD.administrativeScheme, 'municipality-equivalent-parish');
     assert.equal(manifest.AD.featureCount, 1);
   } finally { await rm(f.root, { recursive: true, force: true }); }
 });
