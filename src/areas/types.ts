@@ -58,4 +58,3 @@ export interface CountryScheme {
   readonly labelZh: string;
   readonly status: 'verified' | 'fallback';
 }
-
