@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises';
+import { copyFile, readFile, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -74,7 +74,9 @@ async function verifyProductionBuild() {
   if (!entryStats.isFile() || entryStats.size === 0) throw new Error('入口脚本不存在或为空');
   if (entryStats.size > MAX_ENTRY_BYTES) throw new Error(`入口脚本超过首屏预算：${entryStats.size} > ${MAX_ENTRY_BYTES}`);
   if (/cities\.data-[A-Za-z0-9_-]+\.js/iu.test(html)) throw new Error('城市目录不得进入首屏 HTML');
-  process.stdout.write(`productionHtml=${inputPath}\nhtmlBytes=${inputStats.size}\nentryBytes=${entryStats.size}\n`);
+  const compatibilityPath = join(distribution, 'travel-map.html');
+  await copyFile(inputPath, compatibilityPath);
+  process.stdout.write(`productionHtml=${inputPath}\ncompatibilityHtml=${compatibilityPath}\nhtmlBytes=${inputStats.size}\nentryBytes=${entryStats.size}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
