@@ -18,6 +18,7 @@ import { createApp } from './ui/app';
 
 const CITY_DATA_ATTRIBUTION = 'GeoNames geographical database, licensed under CC BY 4.0 (https://www.geonames.org/).';
 const CITY_DATA_SOURCE_DATE = '2026-08-16';
+const CHINA_MAP_ATTRIBUTION = '中国地级边界：cn-atlas by Amll（ISC）';
 
 async function loadCityIndex() {
   const { CITIES } = await import('./generated/cities.data');
@@ -47,6 +48,7 @@ async function start(): Promise<void> {
       attributions: [
         `${CITY_DATA_ATTRIBUTION}（数据日期 ${CITY_DATA_SOURCE_DATE}）`,
         WORLD_MAP.attribution,
+        CHINA_MAP_ATTRIBUTION,
         NOMINATIM_ATTRIBUTION,
       ],
       privacyNotice: NOMINATIM_PRIVACY_NOTICE,

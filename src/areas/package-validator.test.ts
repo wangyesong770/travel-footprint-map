@@ -91,7 +91,7 @@ describe('country manifest validation', () => {
 });
 
 describe('country TopoJSON package validation', () => {
-  it('accepts every checked-in fixture package using its real manifest bytes', () => {
+  it('accepts every checked-in country package using its real manifest bytes', () => {
     const directory = join(process.cwd(), 'public', 'data', 'countries');
     const manifest = parseCountryManifest(JSON.parse(readFileSync(join(directory, 'manifest.json'), 'utf8')) as unknown);
 
@@ -101,6 +101,18 @@ describe('country TopoJSON package validation', () => {
       expect(parsed.countryCode).toBe(countryCode);
       expect(parsed.features).toHaveLength(manifest[countryCode]!.featureCount);
     }
+  });
+
+  it('ships a real China prefecture map instead of the two-rectangle fixture', () => {
+    const directory = join(process.cwd(), 'public', 'data', 'countries');
+    const manifest = parseCountryManifest(JSON.parse(readFileSync(join(directory, 'manifest.json'), 'utf8')) as unknown);
+    const china = parseCountryPackage(readFileSync(join(directory, 'CN.topojson')), manifest.CN!);
+    const names = new Set(china.features.map((feature) => feature.properties.nameZh));
+
+    expect(manifest.CN?.boundaryVersion).not.toContain('fixture');
+    expect(china.source).toBe('cn-atlas');
+    expect(china.features.length).toBeGreaterThanOrEqual(350);
+    for (const name of ['北京市', '上海市', '广州市', '乌鲁木齐市']) expect(names.has(name)).toBe(true);
   });
 
   it('decodes and whitelists valid Polygon data', () => {
