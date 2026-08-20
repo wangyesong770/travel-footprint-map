@@ -183,14 +183,20 @@ ul { margin: 0; padding: 0; list-style: none; }
   stroke-width: .65;
 }
 
-[data-map-countries] path[role="button"]:focus-visible {
+[data-map-countries] path[role="button"]:focus {
   outline: none;
+}
+
+[data-map-countries] path[role="button"]:focus-visible {
   stroke: var(--ink);
   stroke-width: 2.4;
 }
 
-[data-area-id]:focus-visible {
+[data-area-id]:focus {
   outline: none;
+}
+
+[data-area-id]:focus-visible {
   stroke: #176a64;
   stroke-width: 1.35;
 }

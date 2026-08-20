@@ -12,4 +12,11 @@ describe('map selection styles', () => {
     expect(selectedAreaRule?.[1]).toContain('fill: #55b8ad');
     expect(selectedAreaRule?.[1]).not.toContain('filter:');
   });
+
+  it('suppresses Chromium SVG focus outlines while retaining focus-visible strokes', () => {
+    const stylesheet = readFileSync('src/styles.css', 'utf8');
+
+    expect(stylesheet).toMatch(/\[data-area-id\]:focus\s*\{\s*outline: none;/);
+    expect(stylesheet).toMatch(/\[data-area-id\]:focus-visible\s*\{[^}]*stroke:/);
+  });
 });
