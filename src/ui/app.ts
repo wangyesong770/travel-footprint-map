@@ -348,12 +348,7 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
         });
         const remove = button('删除', 'visit-delete');
         remove.setAttribute('aria-label', `删除${visit.areaSnapshot.nameZh ?? visit.areaSnapshot.nameLocal}的足迹`);
-        remove.addEventListener('click', () => {
-          selectedCityId = undefined;
-          selectedAreaId = visit.areaId;
-          deletionPending = true;
-          renderEditor();
-        });
+        remove.addEventListener('click', () => void track(deleteSelectedArea(visit)));
         item.append(edit, remove);
         list.append(item);
         continue;
@@ -377,12 +372,7 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
       });
       const remove = button('删除', 'visit-delete');
       remove.setAttribute('aria-label', `删除${visit.citySnapshot.zhName ?? visit.citySnapshot.name}的足迹`);
-      remove.addEventListener('click', () => {
-        selectedAreaId = undefined;
-        selectedCityId = visit.cityId;
-        deletionPending = true;
-        renderEditor();
-      });
+      remove.addEventListener('click', () => void track(deleteSelected(visit)));
       item.append(edit, remove);
       list.append(item);
     }
@@ -754,7 +744,7 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
     } else {
       mapEngine.showCountry(activeCountry, new Set(areaVisits
         .filter((visit) => visit.areaSnapshot.countryCode === activeCountry?.countryCode)
-        .map((visit) => visit.areaId)));
+        .map((visit) => visit.areaId)), selectedAreaId);
     }
   }
 

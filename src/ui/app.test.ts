@@ -118,6 +118,7 @@ describe('travel map app', () => {
     expect(view.mapEngine.showCountry).toHaveBeenLastCalledWith(
       expect.objectContaining({ countryCode: 'LI' }),
       new Set(['LI:overture:test-city']),
+      'LI:overture:test-city',
     );
     fireEvent.input(getByLabelText(view.root, '到访时间'), { target: { value: '2026-08' } });
     fireEvent.input(getByLabelText(view.root, '旅行备注'), { target: { value: ' 城堡散步 ' } });
@@ -156,6 +157,7 @@ describe('travel map app', () => {
     expect(view.mapEngine.showCountry).toHaveBeenLastCalledWith(
       expect.objectContaining({ countryCode: 'CN' }),
       new Set(['CN:overture:test-city']),
+      'CN:overture:test-city',
     );
     expect(view.mapEngine.focusArea).toHaveBeenCalledWith('CN:overture:test-city');
     expect(getByRole(view.root, 'heading', { name: '测试市 · Test City' })).toBeTruthy();
@@ -288,10 +290,10 @@ describe('travel map app', () => {
     await view.app.whenIdle();
 
     fireEvent.click(getByRole(view.root, 'button', { name: '删除测试市的足迹' }));
-    fireEvent.click(getByRole(view.root, 'button', { name: '确认删除' }));
     await view.app.whenIdle();
 
     expect(await view.repository.listAreaVisits()).toHaveLength(0);
+    expect(queryByText(view.root, '确认删除')).toBeNull();
     expect(queryByText(view.root, '测试市 · Test City')).toBeNull();
     fireEvent.click(getByRole(view.root, 'button', { name: '撤销删除' }));
     await view.app.whenIdle();

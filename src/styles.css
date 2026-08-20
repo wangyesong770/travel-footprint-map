@@ -183,11 +183,16 @@ ul { margin: 0; padding: 0; list-style: none; }
   stroke-width: .65;
 }
 
-[data-map-countries] path[role="button"]:focus-visible,
-[data-area-id]:focus-visible {
+[data-map-countries] path[role="button"]:focus-visible {
   outline: none;
   stroke: var(--ink);
   stroke-width: 2.4;
+}
+
+[data-area-id]:focus-visible {
+  outline: none;
+  stroke: #176a64;
+  stroke-width: 1.35;
 }
 
 [data-map-countries] .country-visited {
@@ -211,6 +216,16 @@ ul { margin: 0; padding: 0; list-style: none; }
   fill-opacity: .82;
   stroke: var(--coral-dark);
   stroke-width: 1.05;
+}
+
+.area-selected,
+.area-selected:hover,
+.area-selected:focus-visible {
+  fill: #55b8ad;
+  fill-opacity: .96;
+  stroke: #176a64;
+  stroke-width: 1.35;
+  filter: drop-shadow(0 0 5px rgb(23 106 100 / 32%));
 }
 
 [data-map-labels] text {

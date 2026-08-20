@@ -56,7 +56,7 @@ export interface MapEngineOptions {
 export interface MapEngine {
   setVisits(visits: readonly MapVisit[]): void;
   showWorld(summary?: readonly WorldCountrySummary[]): void;
-  showCountry(countryPackage: CountryBoundaryPackage, visitedAreaIds: ReadonlySet<string>): void;
+  showCountry(countryPackage: CountryBoundaryPackage, visitedAreaIds: ReadonlySet<string>, selectedAreaId?: AreaId): void;
   getViewState(): Readonly<MapViewState>;
   focusCity(city: CitySummary): void;
   focusArea(areaId: AreaId): void;
@@ -531,7 +531,7 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
       }
       setState({ zoom: 1, offsetX: 0, offsetY: 0 });
     },
-    showCountry(countryPackage, visitedAreaIds): void {
+    showCountry(countryPackage, visitedAreaIds, selectedAreaId): void {
       if (destroyed) return;
       maximumZoom = COUNTRY_MAX_ZOOM;
       countriesLayer.style.display = 'none';
@@ -555,6 +555,10 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
           path.setAttribute('role', 'button');
           path.setAttribute('aria-label', `${visitedAreaIds.has(area.properties.areaId) ? '已点亮' : '点亮'}${areaLabel(area)}`);
           path.classList.add(visitedAreaIds.has(area.properties.areaId) ? 'area-visited' : 'area-unvisited');
+          if (area.properties.areaId === selectedAreaId) {
+            path.classList.add('area-selected');
+            path.setAttribute('aria-current', 'true');
+          }
           const title = createSvgElement('title');
           title.textContent = areaLabel(area);
           path.append(title);

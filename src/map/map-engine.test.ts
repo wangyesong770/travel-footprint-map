@@ -249,13 +249,16 @@ describe('SVG map engine', () => {
       worldMap: { attribution: 'fixture', countries: [] },
     });
 
-    engine.showCountry(countryPackage, new Set(['CN:overture:beijing']));
+    engine.showCountry(countryPackage, new Set(['CN:overture:beijing']), 'CN:overture:beijing');
 
     expect(svg.querySelectorAll('[data-area-id]')).toHaveLength(2);
     const visited = svg.querySelector<SVGPathElement>('[data-area-id="CN:overture:beijing"]')!;
     const unvisited = svg.querySelector<SVGPathElement>('[data-area-id="CN:overture:shanghai"]')!;
     expect(visited.classList.contains('area-visited')).toBe(true);
+    expect(visited.classList.contains('area-selected')).toBe(true);
+    expect(visited.getAttribute('aria-current')).toBe('true');
     expect(unvisited.classList.contains('area-unvisited')).toBe(true);
+    expect(unvisited.classList.contains('area-selected')).toBe(false);
     expect(visited.getAttribute('aria-label')).toContain('北京');
     expect(visited.querySelector('title')?.textContent).toBe('北京 · Beijing');
     expect(unvisited.querySelector('title')?.textContent).toBe('上海 · Shanghai');
