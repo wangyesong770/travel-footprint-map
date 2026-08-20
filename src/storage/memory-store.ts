@@ -1,4 +1,4 @@
-import type { BackupV1, CachedBoundary, VisitRecord } from '../domain/types';
+import type { BackupV1, CachedBoundary, VisitRecord, VisitV2 } from '../domain/types';
 import type { ImportMode, PersistenceState, TripRepository } from './trip-store';
 
 const DEFAULT_TITLE = '我的世界足迹';
@@ -10,6 +10,7 @@ function clone<T>(value: T): T {
 class MemoryTripStore implements TripRepository {
   readonly persistence: PersistenceState;
   private visits = new Map<number, VisitRecord>();
+  private areaVisits = new Map<string, VisitV2>();
   private boundaries = new Map<number, CachedBoundary>();
   private title = DEFAULT_TITLE;
 
@@ -32,6 +33,23 @@ class MemoryTripStore implements TripRepository {
 
   async deleteVisit(cityId: number): Promise<void> {
     this.visits.delete(cityId);
+  }
+
+  async getAreaVisit(areaId: string): Promise<VisitV2 | undefined> {
+    const value = this.areaVisits.get(areaId);
+    return value ? clone(value) : undefined;
+  }
+
+  async listAreaVisits(): Promise<VisitV2[]> {
+    return [...this.areaVisits.values()].sort((a, b) => a.areaId.localeCompare(b.areaId, 'en')).map(clone);
+  }
+
+  async putAreaVisit(visit: VisitV2): Promise<void> {
+    this.areaVisits.set(visit.areaId, clone(visit));
+  }
+
+  async deleteAreaVisit(areaId: string): Promise<void> {
+    this.areaVisits.delete(areaId);
   }
 
   async getBoundary(cityId: number): Promise<CachedBoundary | undefined> {
@@ -62,6 +80,7 @@ class MemoryTripStore implements TripRepository {
   async importBackup(backup: BackupV1, mode: ImportMode): Promise<void> {
     const nextVisits = mode === 'replace' ? new Map<number, VisitRecord>() : new Map(this.visits);
     const nextBoundaries = mode === 'replace' ? new Map<number, CachedBoundary>() : new Map(this.boundaries);
+    const nextAreaVisits = mode === 'replace' ? new Map<string, VisitV2>() : new Map(this.areaVisits);
     for (const incoming of backup.visits) {
       const current = nextVisits.get(incoming.cityId);
       if (!current || mode === 'replace' || Date.parse(incoming.updatedAt) > Date.parse(current.updatedAt)) {
@@ -74,10 +93,17 @@ class MemoryTripStore implements TripRepository {
         nextBoundaries.set(incoming.cityId, clone(incoming));
       }
     }
+    for (const incoming of backup.areaVisits ?? []) {
+      const current = nextAreaVisits.get(incoming.areaId);
+      if (!current || mode === 'replace' || Date.parse(incoming.updatedAt) > Date.parse(current.updatedAt)) {
+        nextAreaVisits.set(incoming.areaId, clone(incoming));
+      }
+    }
 
     // Swap only after every clone/build operation succeeds, preserving atomic replace semantics.
     this.visits = nextVisits;
     this.boundaries = nextBoundaries;
+    this.areaVisits = nextAreaVisits;
     this.title = backup.title;
   }
 }

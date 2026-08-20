@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 
-import type { BackupV1, CachedBoundary, VisitRecord } from '../domain/types';
+import type { BackupV1, CachedBoundary, VisitRecord, VisitV2 } from '../domain/types';
 import { createMemoryTripStore } from './memory-store';
 import { createTripStore } from './trip-store';
 
@@ -31,6 +31,18 @@ function boundary(cityId: number): CachedBoundary {
   };
 }
 
+function areaVisit(areaId = 'LI:overture:vaduz'): VisitV2 {
+  return {
+    areaId: areaId as VisitV2['areaId'],
+    areaSnapshot: {
+      areaId: areaId as VisitV2['areaId'], countryCode: 'LI', sourceId: 'vaduz', adminLevel: 'municipality',
+      nameLocal: 'Vaduz', aliases: [], centroid: [9.52, 47.14],
+    },
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-02-01T00:00:00.000Z',
+  };
+}
+
 describe.each([
   ['memory', async () => createMemoryTripStore()],
   ['indexeddb', async () => createTripStore({ indexedDB, databaseName: `trip-${crypto.randomUUID()}` })],
@@ -49,6 +61,16 @@ describe.each([
     await store.deleteBoundary(1);
     expect(await store.getVisit(1)).toBeUndefined();
     expect(await store.getBoundary(1)).toBeUndefined();
+  });
+
+  it('persists administrative-area visits by stable area ID', async () => {
+    const store = await makeStore();
+    await store.putAreaVisit(areaVisit());
+    await store.putAreaVisit({ ...areaVisit(), note: 'updated' });
+    expect(await store.listAreaVisits()).toHaveLength(1);
+    expect((await store.getAreaVisit('LI:overture:vaduz'))?.note).toBe('updated');
+    await store.deleteAreaVisit('LI:overture:vaduz');
+    expect(await store.getAreaVisit('LI:overture:vaduz')).toBeUndefined();
   });
 
   it('merges newer visits and unions boundaries atomically', async () => {

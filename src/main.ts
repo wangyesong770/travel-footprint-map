@@ -1,6 +1,8 @@
 import './styles.css';
 
 import { boundaryForUi } from './app-wiring';
+import { CountryPackageMemoryRepository } from './areas/country-package-memory-repository';
+import { CountryPackageService } from './areas/country-package-service';
 import { createBoundaryService } from './boundaries/boundary-service';
 import {
   createNominatimProvider,
@@ -29,11 +31,15 @@ async function start(): Promise<void> {
       repository,
       provider: createNominatimProvider(),
     });
+    const countryPackages = new CountryPackageService({
+      repository: new CountryPackageMemoryRepository(),
+    });
     const app = createApp(root, {
       cityIndex: createCityIndex(CITIES),
       repository,
       createMap: createMapEngine,
       fetchBoundary: async (city, signal) => boundaryForUi(await boundaries.fetchForCity(city, signal)),
+      loadCountry: (countryCode, signal) => countryPackages.load(countryCode, signal),
       exportPoster: (layout, snapshot) => exportPosterPng(snapshot, layout),
       attributions: [
         `${CITY_DATA_ATTRIBUTION}（数据日期 ${CITY_DATA_SOURCE_DATE}）`,

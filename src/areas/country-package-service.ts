@@ -69,7 +69,8 @@ export class CountryPackageService {
 
   constructor(options: CountryPackageServiceOptions) {
     this.repository = options.repository;
-    this.fetchImplementation = options.fetch ?? globalThis.fetch;
+    const fetchImplementation = options.fetch ?? globalThis.fetch;
+    this.fetchImplementation = (input, init) => Reflect.apply(fetchImplementation, globalThis, [input, init]) as Promise<Response>;
     this.subtle = options.subtle ?? globalThis.crypto.subtle;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     if (!Number.isFinite(this.timeoutMs) || this.timeoutMs <= 0) throw new Error('timeoutMs must be positive');

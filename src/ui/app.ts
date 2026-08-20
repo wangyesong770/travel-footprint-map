@@ -1,6 +1,8 @@
 import type { CityIndex } from '../cities/city-index';
+import type { CountryPackageLoadResult } from '../areas/country-package-service';
+import type { AreaId, CountryBoundaryPackage, CountryCode } from '../areas/types';
 import { sanitizeNote, validateVisitDate } from '../domain/validation';
-import type { CachedBoundary, CitySummary, TravelStats, VisitRecord } from '../domain/types';
+import type { CachedBoundary, CitySummary, TravelStats, VisitRecord, VisitV2 } from '../domain/types';
 import type { MapClick, MapEngine, MapEngineOptions, MapVisit } from '../map/map-engine';
 import { exportBackup, parseBackup } from '../storage/backup';
 import { calculateStats } from '../storage/statistics';
@@ -11,6 +13,7 @@ export interface AppDependencies {
   repository: TripRepository;
   createMap(svg: SVGSVGElement, options: MapEngineOptions): MapEngine;
   fetchBoundary(city: CitySummary, signal: AbortSignal): Promise<CachedBoundary | undefined>;
+  loadCountry(countryCode: CountryCode, signal: AbortSignal): Promise<CountryPackageLoadResult>;
   exportPoster(layout: 'landscape' | 'square', snapshot: AppSnapshot): Promise<Blob>;
   saveBlob?: (blob: Blob, filename: string) => void;
   chooseBackupText?: () => Promise<string | undefined>;
@@ -47,6 +50,7 @@ interface AppElements {
   empty: HTMLElement;
   status: HTMLElement;
   attribution: HTMLElement;
+  navigation: HTMLElement;
   map: SVGSVGElement;
 }
 
@@ -100,10 +104,12 @@ function buildShell(root: HTMLElement): AppElements {
   mapStage.setAttribute('aria-label', '旅行地图');
   const map = document.createElementNS(SVG_NAMESPACE, 'svg');
   map.classList.add('world-map');
+  const navigation = document.createElement('div');
+  navigation.className = 'map-navigation';
   const empty = document.createElement('div');
   empty.className = 'empty-invitation';
   empty.textContent = '从第一座城市开始';
-  mapStage.append(map, empty);
+  mapStage.append(navigation, map, empty);
 
   const journal = document.createElement('aside');
   journal.className = 'journal-panel';
@@ -148,7 +154,7 @@ function buildShell(root: HTMLElement): AppElements {
   journal.append(journalToggle, searchLabel, searchResults, nearby, visitList, editor, actions, importDialog, undo, status, attribution);
   workspace.append(mapStage, journal);
   root.replaceChildren(header, workspace);
-  return { heading, title, stats, search, searchResults, nearby, visitList, editor, actions, importDialog, undo, empty, status, attribution, map };
+  return { heading, title, stats, search, searchResults, nearby, visitList, editor, actions, importDialog, undo, empty, status, attribution, navigation, map };
 }
 
 export function createApp(root: HTMLElement, dependencies: AppDependencies): TravelMapApp {
@@ -157,17 +163,24 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
   const now = dependencies.now ?? (() => new Date().toISOString());
   let title = '我的世界足迹';
   let visits: VisitRecord[] = [];
+  let areaVisits: VisitV2[] = [];
   let boundaries: CachedBoundary[] = [];
   let selectedCityId: number | undefined;
+  let selectedAreaId: AreaId | undefined;
   let deletionPending = false;
   let lastDeleted: { visit: VisitRecord; boundary?: CachedBoundary } | undefined;
   let pendingImport: ReturnType<typeof parseBackup> | undefined;
+  let activeCountry: CountryBoundaryPackage | undefined;
   let confirmingReplace = false;
   let destroyed = false;
   const pending = new Set<Promise<unknown>>();
   const abortController = new AbortController();
   const mapEngine = dependencies.createMap(elements.map, {
-    onMapClick: (point) => showNearby(point),
+    onMapClick: (point) => {
+      if (activeCountry === undefined) showNearby(point);
+    },
+    onCountrySelect: (countryCode) => void track(enterCountry(countryCode)),
+    onAreaSelect: (areaId) => void track(selectArea(areaId)),
   });
 
   const attributionText = (dependencies.attributions ?? []).filter(Boolean).join(' · ');
@@ -201,11 +214,76 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
     elements.status.dataset.kind = kind;
   }
 
+  function renderNavigation(): void {
+    elements.navigation.replaceChildren();
+    if (activeCountry === undefined) return;
+    const back = button('返回世界地图', 'map-back');
+    back.addEventListener('click', () => {
+      activeCountry = undefined;
+      render();
+      setStatus('已返回世界地图');
+    });
+    const label = document.createElement('strong');
+    label.textContent = `${activeCountry.countryCode} · ${activeCountry.administrativeScheme}`;
+    elements.navigation.append(back, label);
+  }
+
+  async function enterCountry(countryCode: CountryCode): Promise<void> {
+    setStatus(`正在加载 ${countryCode} 的城市边界`);
+    const result = await dependencies.loadCountry(countryCode, abortController.signal);
+    if (result.status === 'unavailable') {
+      setStatus(`该国家的城市边界尚未发布（${result.reason.kind}）`, 'error');
+      return;
+    }
+    activeCountry = result.package;
+    elements.nearby.replaceChildren();
+    elements.searchResults.replaceChildren();
+    render();
+    setStatus(`已进入 ${countryCode}，点击城市区域即可点亮`);
+  }
+
+  async function selectArea(areaId: AreaId): Promise<void> {
+    if (activeCountry === undefined) return;
+    const area = activeCountry.features.find((candidate) => candidate.properties.areaId === areaId);
+    if (area === undefined) {
+      setStatus('所选城市不属于当前国家地图', 'error');
+      return;
+    }
+    let visit = areaVisits.find((candidate) => candidate.areaId === areaId);
+    if (visit === undefined) {
+      const timestamp = now();
+      visit = {
+        areaId,
+        areaSnapshot: {
+          areaId,
+          countryCode: area.properties.countryCode,
+          sourceId: area.properties.sourceId,
+          adminLevel: area.properties.adminLevel,
+          ...(area.properties.nameZh === undefined ? {} : { nameZh: area.properties.nameZh }),
+          nameLocal: area.properties.nameLocal,
+          aliases: [...area.properties.aliases],
+          centroid: [area.properties.centroid[0], area.properties.centroid[1]],
+        },
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      await dependencies.repository.putAreaVisit(visit);
+      areaVisits = [...areaVisits, visit];
+    }
+    selectedCityId = undefined;
+    selectedAreaId = areaId;
+    render();
+    mapEngine.focusArea(areaId);
+    setStatus(`${area.properties.nameZh ?? area.properties.nameLocal}已点亮，可填写日期和备注`);
+  }
+
   function renderStats(): void {
     const stats = calculateStats(visits);
+    const areaCountries = new Set(areaVisits.map((visit) => visit.areaSnapshot.countryCode));
+    const legacyCountries = new Set(visits.map((visit) => visit.citySnapshot.countryCode));
     const continents = Object.keys(stats.continentCounts).length;
     elements.stats.replaceChildren();
-    for (const value of [`${stats.cityCount} 座城市`, `${stats.countryCount} 个国家/地区`, `${continents} 个大洲`]) {
+    for (const value of [`${stats.cityCount + areaVisits.length} 座城市`, `${new Set([...areaCountries, ...legacyCountries]).size} 个国家/地区`, `${continents} 个大洲`]) {
       const badge = document.createElement('span');
       badge.textContent = value;
       elements.stats.append(badge);
@@ -213,13 +291,36 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
   }
 
   function renderVisits(): void {
-    elements.empty.hidden = visits.length > 0;
-    elements.empty.textContent = visits.length > 0 ? '' : '从第一座城市开始';
+    const hasVisits = visits.length + areaVisits.length > 0;
+    elements.empty.hidden = hasVisits;
+    elements.empty.textContent = hasVisits ? '' : '从第一座城市开始';
     elements.visitList.replaceChildren();
-    if (visits.length === 0) return;
+    if (!hasVisits) return;
     const heading = document.createElement('h2');
     heading.textContent = '最近足迹';
     const list = document.createElement('ul');
+    for (const visit of [...areaVisits].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))) {
+      const item = document.createElement('li');
+      const name = visit.areaSnapshot.nameZh && visit.areaSnapshot.nameZh !== visit.areaSnapshot.nameLocal
+        ? `${visit.areaSnapshot.nameZh} · ${visit.areaSnapshot.nameLocal}`
+        : visit.areaSnapshot.nameZh ?? visit.areaSnapshot.nameLocal;
+      const edit = button(`编辑${visit.areaSnapshot.nameZh ?? visit.areaSnapshot.nameLocal}`);
+      edit.className = 'visit-card';
+      edit.setAttribute('aria-label', `编辑${visit.areaSnapshot.nameZh ?? visit.areaSnapshot.nameLocal}`);
+      const strong = document.createElement('strong');
+      strong.textContent = name;
+      const meta = document.createElement('small');
+      meta.textContent = [visit.visitedOn, visit.areaSnapshot.countryCode].filter(Boolean).join(' · ');
+      edit.replaceChildren(strong, meta);
+      edit.addEventListener('click', () => {
+        selectedCityId = undefined;
+        selectedAreaId = visit.areaId;
+        renderEditor();
+        mapEngine.focusArea(visit.areaId);
+      });
+      item.append(edit);
+      list.append(item);
+    }
     for (const visit of [...visits].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))) {
       const item = document.createElement('li');
       const edit = button(`编辑${visit.citySnapshot.zhName ?? visit.citySnapshot.name}`);
@@ -243,6 +344,11 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
 
   function renderEditor(): void {
     elements.editor.replaceChildren();
+    const areaVisit = areaVisits.find((candidate) => candidate.areaId === selectedAreaId);
+    if (areaVisit !== undefined) {
+      renderAreaEditor(areaVisit);
+      return;
+    }
     const visit = visits.find((candidate) => candidate.cityId === selectedCityId);
     if (!visit) return;
     const heading = document.createElement('h2');
@@ -311,6 +417,54 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
       });
       elements.editor.append(warning, confirm, cancel);
     }
+  }
+
+  function renderAreaEditor(visit: VisitV2): void {
+    const displayName = visit.areaSnapshot.nameZh && visit.areaSnapshot.nameZh !== visit.areaSnapshot.nameLocal
+      ? `${visit.areaSnapshot.nameZh} · ${visit.areaSnapshot.nameLocal}`
+      : visit.areaSnapshot.nameZh ?? visit.areaSnapshot.nameLocal;
+    const heading = document.createElement('h2');
+    heading.textContent = displayName;
+    const dateLabel = document.createElement('label');
+    dateLabel.textContent = '到访时间';
+    const date = document.createElement('input');
+    date.value = visit.visitedOn ?? '';
+    date.placeholder = '例如 2024、2024-07 或 2024-07-16';
+    date.setAttribute('aria-label', '到访时间');
+    dateLabel.append(date);
+    const noteLabel = document.createElement('label');
+    noteLabel.textContent = '旅行备注';
+    const note = document.createElement('textarea');
+    note.value = visit.note ?? '';
+    note.maxLength = 500;
+    note.setAttribute('aria-label', '旅行备注');
+    noteLabel.append(note);
+    const save = button('保存记录', 'primary-action');
+    save.addEventListener('click', () => void track((async () => {
+      try {
+        const dateValue = date.value.trim();
+        const noteValue = sanitizeNote(note.value);
+        const dateFields = dateValue ? validateVisitDate(dateValue) : undefined;
+        const next: VisitV2 = {
+          ...visit,
+          updatedAt: now(),
+          ...(dateFields === undefined ? {} : { visitedOn: dateFields.value, datePrecision: dateFields.precision }),
+          ...(noteValue ? { note: noteValue } : {}),
+        };
+        if (dateFields === undefined) {
+          delete (next as { visitedOn?: string }).visitedOn;
+          delete (next as { datePrecision?: string }).datePrecision;
+        }
+        if (!noteValue) delete (next as { note?: string }).note;
+        await dependencies.repository.putAreaVisit(next);
+        areaVisits = areaVisits.map((candidate) => candidate.areaId === next.areaId ? next : candidate);
+        render();
+        setStatus('记录已保存');
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : '记录保存失败', 'error');
+      }
+    })()));
+    elements.editor.append(heading, dateLabel, noteLabel, save);
   }
 
   async function deleteSelected(visit: VisitRecord): Promise<void> {
@@ -400,7 +554,7 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
     elements.importDialog.replaceChildren();
     if (!pendingImport) return;
     const message = document.createElement('p');
-    message.textContent = `备份包含 ${pendingImport.visits.length} 座城市，请选择导入方式。`;
+    message.textContent = `备份包含 ${pendingImport.visits.length + (pendingImport.areaVisits?.length ?? 0)} 座城市，请选择导入方式。`;
     const merge = button('合并导入', 'primary-action');
     merge.addEventListener('click', () => void track(applyImport('merge')));
     const replace = button(confirmingReplace ? '确认替换现有数据' : '替换导入', 'danger-action');
@@ -424,14 +578,16 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
   async function applyImport(mode: 'merge' | 'replace'): Promise<void> {
     if (!pendingImport) return;
     await dependencies.repository.importBackup(pendingImport, mode);
-    [title, visits, boundaries] = await Promise.all([
+    [title, visits, boundaries, areaVisits] = await Promise.all([
       dependencies.repository.getTitle(),
       dependencies.repository.listVisits(),
       dependencies.repository.listBoundaries(),
+      dependencies.repository.listAreaVisits(),
     ]);
     pendingImport = undefined;
     confirmingReplace = false;
     selectedCityId = undefined;
+    selectedAreaId = undefined;
     renderImportDialog();
     render();
     setStatus(mode === 'merge' ? '备份已合并' : '备份已替换');
@@ -486,7 +642,17 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
     renderVisits();
     renderEditor();
     renderActions();
-    mapEngine.setVisits(mapVisits());
+    renderNavigation();
+    if (activeCountry === undefined) {
+      const counts = new Map<string, number>();
+      for (const visit of visits) counts.set(visit.citySnapshot.countryCode, (counts.get(visit.citySnapshot.countryCode) ?? 0) + 1);
+      mapEngine.showWorld([...counts].map(([countryCode, visitedCount]) => ({ countryCode: countryCode as CountryCode, visitedCount })));
+      mapEngine.setVisits(mapVisits());
+    } else {
+      mapEngine.showCountry(activeCountry, new Set(areaVisits
+        .filter((visit) => visit.areaSnapshot.countryCode === activeCountry?.countryCode)
+        .map((visit) => visit.areaId)));
+    }
   }
 
   function showNearby(point: MapClick): void {
@@ -562,10 +728,11 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
 
   const ready = track((async () => {
     try {
-      [title, visits, boundaries] = await Promise.all([
+      [title, visits, boundaries, areaVisits] = await Promise.all([
         dependencies.repository.getTitle(),
         dependencies.repository.listVisits(),
         dependencies.repository.listBoundaries(),
+        dependencies.repository.listAreaVisits(),
       ]);
       render();
       if (dependencies.repository.persistence.mode === 'memory') {

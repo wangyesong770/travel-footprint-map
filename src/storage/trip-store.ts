@@ -1,4 +1,4 @@
-import type { BackupV1, CachedBoundary, VisitRecord } from '../domain/types';
+import type { BackupV1, CachedBoundary, VisitRecord, VisitV2 } from '../domain/types';
 import { createMemoryTripStore } from './memory-store';
 
 export type ImportMode = 'merge' | 'replace';
@@ -12,6 +12,10 @@ export interface TripRepository {
   listVisits(): Promise<VisitRecord[]>;
   putVisit(visit: VisitRecord): Promise<void>;
   deleteVisit(cityId: number): Promise<void>;
+  getAreaVisit(areaId: string): Promise<VisitV2 | undefined>;
+  listAreaVisits(): Promise<VisitV2[]>;
+  putAreaVisit(visit: VisitV2): Promise<void>;
+  deleteAreaVisit(areaId: string): Promise<void>;
   getBoundary(cityId: number): Promise<CachedBoundary | undefined>;
   listBoundaries(): Promise<CachedBoundary[]>;
   putBoundary(boundary: CachedBoundary): Promise<void>;
@@ -26,7 +30,7 @@ export interface CreateTripStoreOptions {
   databaseName?: string;
 }
 
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 const DEFAULT_TITLE = '我的世界足迹';
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
@@ -56,6 +60,7 @@ function openDatabase(factory: IDBFactory, name: string): Promise<IDBDatabase> {
     request.onupgradeneeded = () => {
       const database = request.result;
       if (!database.objectStoreNames.contains('visits')) database.createObjectStore('visits', { keyPath: 'cityId' });
+      if (!database.objectStoreNames.contains('areaVisits')) database.createObjectStore('areaVisits', { keyPath: 'areaId' });
       if (!database.objectStoreNames.contains('boundaries')) database.createObjectStore('boundaries', { keyPath: 'cityId' });
       if (!database.objectStoreNames.contains('meta')) database.createObjectStore('meta');
     };
@@ -86,6 +91,28 @@ class IndexedDbTripStore implements TripRepository {
 
   async deleteVisit(cityId: number): Promise<void> {
     await this.deleteOne('visits', cityId);
+  }
+
+  async getAreaVisit(areaId: string): Promise<VisitV2 | undefined> {
+    const transaction = this.database.transaction('areaVisits', 'readonly');
+    return requestResult(transaction.objectStore('areaVisits').get(areaId)) as Promise<VisitV2 | undefined>;
+  }
+
+  async listAreaVisits(): Promise<VisitV2[]> {
+    const transaction = this.database.transaction('areaVisits', 'readonly');
+    return requestResult(transaction.objectStore('areaVisits').getAll()) as Promise<VisitV2[]>;
+  }
+
+  async putAreaVisit(visit: VisitV2): Promise<void> {
+    const transaction = this.database.transaction('areaVisits', 'readwrite');
+    transaction.objectStore('areaVisits').put(visit);
+    await transactionDone(transaction);
+  }
+
+  async deleteAreaVisit(areaId: string): Promise<void> {
+    const transaction = this.database.transaction('areaVisits', 'readwrite');
+    transaction.objectStore('areaVisits').delete(areaId);
+    await transactionDone(transaction);
   }
 
   async getBoundary(cityId: number): Promise<CachedBoundary | undefined> {
@@ -119,12 +146,14 @@ class IndexedDbTripStore implements TripRepository {
   }
 
   async importBackup(backup: BackupV1, mode: ImportMode): Promise<void> {
-    const transaction = this.database.transaction(['visits', 'boundaries', 'meta'], 'readwrite');
+    const transaction = this.database.transaction(['visits', 'areaVisits', 'boundaries', 'meta'], 'readwrite');
     const visits = transaction.objectStore('visits');
+    const areaVisits = transaction.objectStore('areaVisits');
     const boundaries = transaction.objectStore('boundaries');
     try {
       if (mode === 'replace') {
         visits.clear();
+        areaVisits.clear();
         boundaries.clear();
         for (const visit of backup.visits) visits.put(visit);
       } else {
@@ -132,6 +161,14 @@ class IndexedDbTripStore implements TripRepository {
           const current = await requestResult(visits.get(incoming.cityId)) as VisitRecord | undefined;
           if (!current || Date.parse(incoming.updatedAt) > Date.parse(current.updatedAt)) visits.put(incoming);
         }
+      }
+      for (const incoming of backup.areaVisits ?? []) {
+        if (mode === 'replace') {
+          areaVisits.put(incoming);
+          continue;
+        }
+        const current = await requestResult(areaVisits.get(incoming.areaId)) as VisitV2 | undefined;
+        if (!current || Date.parse(incoming.updatedAt) > Date.parse(current.updatedAt)) areaVisits.put(incoming);
       }
       for (const incoming of backup.boundaries) {
         if (mode === 'replace') {

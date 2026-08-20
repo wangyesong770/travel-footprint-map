@@ -191,14 +191,53 @@ describe('SVG map engine', () => {
     engine.showWorld([{ countryCode: 'CN', visitedCount: 2 }]);
 
     const country = svg.querySelector<SVGPathElement>('[data-country="CN"]')!;
+    const capture = vi.fn();
+    Object.defineProperty(svg, 'setPointerCapture', { value: capture, configurable: true });
     expect(country.getAttribute('role')).toBe('button');
     expect(country.getAttribute('tabindex')).toBe('0');
     expect(country.classList.contains('country-visited')).toBe(true);
+    country.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 7, bubbles: true }));
+    country.dispatchEvent(new PointerEvent('pointerup', { pointerId: 7, bubbles: true }));
     country.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     country.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
 
     expect(onCountrySelect).toHaveBeenCalledTimes(2);
+    expect(capture).not.toHaveBeenCalled();
     expect(onCountrySelect).toHaveBeenLastCalledWith('CN');
+    engine.destroy();
+  });
+
+  it('renders tiny countries above larger neighbours so pointer selection is not occluded', () => {
+    const svg = makeSvg();
+    const engine = createMapEngine(svg, {
+      worldMap: {
+        attribution: 'fixture',
+        countries: [
+          { id: 'LI', path: 'M5 5L5.2 5L5.2 5.2L5 5Z' },
+          { id: 'CH', path: 'M0 0L20 0L20 20L0 20Z' },
+        ],
+      },
+    });
+
+    expect([...svg.querySelectorAll('[data-country]')].map((path) => (path as SVGPathElement).dataset.country)).toEqual(['CH', 'LI']);
+    engine.destroy();
+  });
+
+  it('adds a delegated pointer target for sub-pixel countries', () => {
+    const onCountrySelect = vi.fn();
+    const svg = makeSvg();
+    const engine = createMapEngine(svg, {
+      onCountrySelect,
+      worldMap: { attribution: 'fixture', countries: [{ id: 'LI', path: 'M5 5L5.2 5L5.2 5.2L5 5Z' }] },
+    });
+
+    const hit = svg.querySelector<SVGCircleElement>('[data-country-hit="LI"]')!;
+    expect(Number(hit.getAttribute('r'))).toBe(4);
+    expect(hit.getAttribute('role')).toBe('button');
+    expect(hit.getAttribute('aria-label')).toBe('进入LI');
+    expect(svg.querySelector('[data-country="LI"]')?.getAttribute('aria-hidden')).toBe('true');
+    hit.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onCountrySelect).toHaveBeenCalledWith('LI');
     engine.destroy();
   });
 
@@ -252,13 +291,29 @@ describe('SVG map engine', () => {
       },
     };
     const engine = createMapEngine(svg, { onAreaSelect, worldMap: { attribution: 'fixture', countries: [] } });
-    engine.showCountry({ ...countryPackage, features: [tinyArea] }, new Set());
+    engine.showCountry({ ...countryPackage, features: [countryPackage.features[0]!, tinyArea] }, new Set());
 
     const hit = svg.querySelector<SVGPathElement>('[data-area-hit="CN:overture:tiny"]')!;
     expect(hit).not.toBeNull();
     expect(hit.getAttribute('aria-hidden')).toBe('true');
     hit.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     expect(onAreaSelect).toHaveBeenCalledWith('CN:overture:tiny');
+    engine.destroy();
+  });
+
+  it('fits a microstate beyond the world-view zoom ceiling', () => {
+    const svg = makeSvg();
+    const tinyArea: CityArea = {
+      ...countryPackage.features[0]!,
+      properties: { ...countryPackage.features[0]!.properties, areaId: 'CN:overture:microstate' as const },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [[[9.50, 47.10], [9.51, 47.10], [9.51, 47.11], [9.50, 47.10]]],
+      },
+    };
+    const engine = createMapEngine(svg, { worldMap: { attribution: 'fixture', countries: [] } });
+    engine.showCountry({ ...countryPackage, features: [tinyArea] }, new Set());
+    expect(engine.getViewState().zoom).toBeGreaterThan(8);
     engine.destroy();
   });
 });

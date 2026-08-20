@@ -72,6 +72,8 @@ export interface BackupV1 {
   title: string;
   visits: VisitRecord[];
   boundaries: CachedBoundary[];
+  /** Administrative-area visits added by the country drill-down experience. */
+  areaVisits?: VisitV2[];
 }
 
 export interface TravelStats {

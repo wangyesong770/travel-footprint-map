@@ -1,4 +1,4 @@
-import type { VisitRecord } from '../domain/types';
+import type { VisitRecord, VisitV2 } from '../domain/types';
 import { createMemoryTripStore } from './memory-store';
 import { BACKUP_LIMITS, exportBackup, mergeBackup, parseBackup } from './backup';
 
@@ -77,4 +77,33 @@ it('exports and merges using repository transaction semantics', async () => {
 
   await mergeBackup(store, { ...exported, title: '新标题', visits: [{ ...first, updatedAt: '2026-05-01T00:00:00.000Z', note: 'new' }] }, 'merge');
   expect((await store.getVisit(1))?.note).toBe('new');
+});
+
+it('round-trips administrative-area visits in a complete backup', async () => {
+  const store = createMemoryTripStore();
+  const areaVisit: VisitV2 = {
+    areaId: 'LI:overture:vaduz',
+    areaSnapshot: {
+      areaId: 'LI:overture:vaduz',
+      countryCode: 'LI',
+      sourceId: 'vaduz',
+      adminLevel: 'municipality',
+      nameZh: '瓦杜兹',
+      nameLocal: 'Vaduz',
+      aliases: [],
+      centroid: [9.52, 47.14],
+    },
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-02-01T00:00:00.000Z',
+    visitedOn: '2025',
+    datePrecision: 'year',
+  };
+  await store.putAreaVisit(areaVisit);
+
+  const exported = await exportBackup(store, () => '2026-04-01T00:00:00.000Z');
+  expect(exported.areaVisits).toEqual([areaVisit]);
+
+  const restored = createMemoryTripStore();
+  await restored.importBackup(exported, 'replace');
+  expect(await restored.listAreaVisits()).toEqual([areaVisit]);
 });

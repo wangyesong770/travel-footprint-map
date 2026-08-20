@@ -1,6 +1,7 @@
 import { fireEvent, getByLabelText, getByRole, getByText, queryByText } from '@testing-library/dom';
 
 import { createCityIndex } from '../cities/city-index';
+import type { AreaId, CountryBoundaryPackage, CountryCode } from '../areas/types';
 import { sampleCities } from '../cities/sample-data';
 import type { CachedBoundary } from '../domain/types';
 import type { MapClick, MapEngine, MapEngineOptions, MapVisit } from '../map/map-engine';
@@ -13,6 +14,8 @@ function setup() {
   const root = document.querySelector<HTMLElement>('#app')!;
   const repository = createMemoryTripStore();
   let mapClick: ((point: MapClick) => void) | undefined;
+  let countrySelect: ((countryCode: CountryCode) => void) | undefined;
+  let areaSelect: ((areaId: AreaId) => void) | undefined;
   let visits: readonly MapVisit[] = [];
   const mapEngine: MapEngine = {
     setVisits(next) { visits = next; },
@@ -34,8 +37,35 @@ function setup() {
     repository,
     createMap(_svg: SVGSVGElement, options: MapEngineOptions) {
       mapClick = options.onMapClick;
+      countrySelect = options.onCountrySelect;
+      areaSelect = options.onAreaSelect;
       return mapEngine;
     },
+    loadCountry: vi.fn(async (countryCode: CountryCode) => ({
+      status: 'fresh' as const,
+      package: {
+        schemaVersion: 1,
+        countryCode,
+        boundaryVersion: 'test-v1',
+        administrativeScheme: 'municipality',
+        source: 'Overture Maps',
+        attribution: 'Overture Maps Foundation ODbL 1.0',
+        features: [{
+          type: 'Feature',
+          properties: {
+            areaId: `${countryCode}:overture:test-city` as AreaId,
+            countryCode,
+            sourceId: 'test-city',
+            adminLevel: 'municipality',
+            nameZh: '测试市',
+            nameLocal: 'Test City',
+            aliases: [],
+            centroid: [10, 20],
+          },
+          geometry: { type: 'Polygon', coordinates: [[[9, 19], [11, 19], [11, 21], [9, 21], [9, 19]]] },
+        }],
+      } satisfies CountryBoundaryPackage,
+    })),
     fetchBoundary: boundary,
     exportPoster: poster,
     saveBlob,
@@ -44,10 +74,55 @@ function setup() {
     attributions: ['GeoNames CC BY 4.0', 'Natural Earth public domain'],
     privacyNotice: '仅在获取边界时发送所选城市名称，不发送旅行备注。',
   });
-  return { root, repository, app, boundary, poster, saveBlob, chooseBackupText, get visits() { return visits; }, clickMap: (lon: number, lat: number) => mapClick?.({ lon, lat }) };
+  return {
+    root, repository, app, boundary, poster, saveBlob, chooseBackupText,
+    get visits() { return visits; },
+    clickMap: (lon: number, lat: number) => mapClick?.({ lon, lat }),
+    selectCountry: (countryCode: CountryCode) => countrySelect?.(countryCode),
+    selectArea: (areaId: AreaId) => areaSelect?.(areaId),
+    mapEngine,
+  };
 }
 
 describe('travel map app', () => {
+  it('loads a selected country package and renders its administrative areas', async () => {
+    const view = setup();
+    await view.app.ready;
+
+    view.selectCountry('LI');
+    await view.app.whenIdle();
+
+    expect(view.mapEngine.showCountry).toHaveBeenCalledOnce();
+    expect(getByRole(view.root, 'button', { name: '返回世界地图' })).toBeTruthy();
+    expect(getByText(view.root, /已进入 LI/)).toBeTruthy();
+  });
+
+  it('immediately lights a selected area and opens its editor', async () => {
+    const view = setup();
+    await view.app.ready;
+    view.selectCountry('LI');
+    await view.app.whenIdle();
+
+    view.selectArea('LI:overture:test-city');
+    await view.app.whenIdle();
+
+    expect(getByRole(view.root, 'heading', { name: '测试市 · Test City' })).toBeTruthy();
+    expect(getByRole(view.root, 'button', { name: '保存记录' })).toBeTruthy();
+    expect(view.mapEngine.showCountry).toHaveBeenLastCalledWith(
+      expect.objectContaining({ countryCode: 'LI' }),
+      new Set(['LI:overture:test-city']),
+    );
+    fireEvent.input(getByLabelText(view.root, '到访时间'), { target: { value: '2026-08' } });
+    fireEvent.input(getByLabelText(view.root, '旅行备注'), { target: { value: ' 城堡散步 ' } });
+    fireEvent.click(getByRole(view.root, 'button', { name: '保存记录' }));
+    await view.app.whenIdle();
+    expect(await view.repository.getAreaVisit('LI:overture:test-city')).toMatchObject({
+      visitedOn: '2026-08',
+      datePrecision: 'month',
+      note: '城堡散步',
+    });
+  });
+
   it('renders an inviting empty state and zeroed statistics', async () => {
     const view = setup();
     await view.app.ready;

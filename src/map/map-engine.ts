@@ -8,7 +8,8 @@ const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const MAP_WIDTH = 1000;
 const MAP_HEIGHT = 500;
 const MIN_ZOOM = 1;
-const MAX_ZOOM = 8;
+const WORLD_MAX_ZOOM = 8;
+const COUNTRY_MAX_ZOOM = 4096;
 
 export interface WorldMapLabel {
   name: string;
@@ -80,8 +81,8 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
-function clampState(state: MapViewState): MapViewState {
-  const zoom = clamp(state.zoom, MIN_ZOOM, MAX_ZOOM);
+function clampState(state: MapViewState, maximumZoom: number): MapViewState {
+  const zoom = clamp(state.zoom, MIN_ZOOM, maximumZoom);
   return {
     zoom,
     offsetX: clamp(state.offsetX, MAP_WIDTH - MAP_WIDTH * zoom, 0),
@@ -89,14 +90,14 @@ function clampState(state: MapViewState): MapViewState {
   };
 }
 
-function zoomAround(state: MapViewState, nextZoom: number, anchorX: number, anchorY: number): MapViewState {
-  const zoom = clamp(nextZoom, MIN_ZOOM, MAX_ZOOM);
+function zoomAround(state: MapViewState, nextZoom: number, anchorX: number, anchorY: number, maximumZoom: number): MapViewState {
+  const zoom = clamp(nextZoom, MIN_ZOOM, maximumZoom);
   const ratio = zoom / state.zoom;
   return clampState({
     zoom,
     offsetX: anchorX - (anchorX - state.offsetX) * ratio,
     offsetY: anchorY - (anchorY - state.offsetY) * ratio,
-  });
+  }, maximumZoom);
 }
 
 function eventPoint(svg: SVGSVGElement, clientX: number, clientY: number): PointerPosition {
@@ -122,6 +123,38 @@ function isSafeGeneratedPath(path: string): boolean {
   return path.length <= 1_000_000 && /^[MmLlHhVvCcSsQqTtAaZz0-9eE+.,\s-]+$/.test(path);
 }
 
+interface PathBounds {
+  readonly minimumX: number;
+  readonly maximumX: number;
+  readonly minimumY: number;
+  readonly maximumY: number;
+}
+
+function pathBounds(path: string): PathBounds | undefined {
+  const values = path.match(/-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/giu)?.map(Number) ?? [];
+  let minimumX = Number.POSITIVE_INFINITY;
+  let maximumX = Number.NEGATIVE_INFINITY;
+  let minimumY = Number.POSITIVE_INFINITY;
+  let maximumY = Number.NEGATIVE_INFINITY;
+  for (let index = 0; index + 1 < values.length; index += 2) {
+    const x = values[index]!;
+    const y = values[index + 1]!;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    minimumX = Math.min(minimumX, x);
+    maximumX = Math.max(maximumX, x);
+    minimumY = Math.min(minimumY, y);
+    maximumY = Math.max(maximumY, y);
+  }
+  if (![minimumX, maximumX, minimumY, maximumY].every(Number.isFinite)) return undefined;
+  return { minimumX, maximumX, minimumY, maximumY };
+}
+
+function pathBoundingArea(path: string): number {
+  const bounds = pathBounds(path);
+  if (bounds === undefined) return Number.POSITIVE_INFINITY;
+  return Math.max(bounds.maximumX - bounds.minimumX, 0) * Math.max(bounds.maximumY - bounds.minimumY, 0);
+}
+
 function markerLabel(city: CitySummary): string {
   return `已到访：${city.zhName ?? city.name}${city.zhName && city.name !== city.zhName ? ` · ${city.name}` : ''}`;
 }
@@ -133,7 +166,7 @@ function areaLabel(area: CityArea): string {
     : primary;
 }
 
-function isTinyArea(area: CityArea): boolean {
+function isTinyArea(area: CityArea, zoom = 1): boolean {
   const polygons = area.geometry.type === 'Polygon' ? [area.geometry.coordinates] : area.geometry.coordinates;
   let minimumX = Number.POSITIVE_INFINITY;
   let maximumX = Number.NEGATIVE_INFINITY;
@@ -150,7 +183,7 @@ function isTinyArea(area: CityArea): boolean {
       }
     }
   }
-  return Math.max(maximumX - minimumX, maximumY - minimumY) < 4;
+  return Math.max(maximumX - minimumX, maximumY - minimumY) * zoom < 4;
 }
 
 function fitAreas(areas: readonly CityArea[], setState: (state: MapViewState) => void): void {
@@ -180,7 +213,7 @@ function fitAreas(areas: readonly CityArea[], setState: (state: MapViewState) =>
   }
   const width = Math.max(maximumX - minimumX, 1);
   const height = Math.max(maximumY - minimumY, 1);
-  const zoom = clamp(Math.min(MAP_WIDTH * 0.82 / width, MAP_HEIGHT * 0.82 / height), MIN_ZOOM, MAX_ZOOM);
+  const zoom = clamp(Math.min(MAP_WIDTH * 0.82 / width, MAP_HEIGHT * 0.82 / height), MIN_ZOOM, COUNTRY_MAX_ZOOM);
   setState({
     zoom,
     offsetX: MAP_WIDTH / 2 - (minimumX + maximumX) / 2 * zoom,
@@ -216,7 +249,9 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
   viewport.append(countriesLayer, labelsLayer, boundariesLayer, pointsLayer);
   svg.append(viewport);
 
-  for (const country of worldMap.countries) {
+  // SVG hit testing prefers later siblings. Draw larger countries first so
+  // microstates remain clickable where their paths overlap a neighbour.
+  for (const country of [...worldMap.countries].sort((left, right) => pathBoundingArea(right.path) - pathBoundingArea(left.path))) {
     if (!/^[A-Za-z0-9-]{1,12}$/.test(country.id) || !isSafeGeneratedPath(country.path)) continue;
     const path = createSvgElement('path');
     path.dataset.country = country.id;
@@ -226,6 +261,25 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
     path.setAttribute('role', 'button');
     path.setAttribute('aria-label', `进入${country.label?.name ?? country.id}`);
     countriesLayer.append(path);
+    const bounds = pathBounds(country.path);
+    if (bounds !== undefined && Math.max(bounds.maximumX - bounds.minimumX, bounds.maximumY - bounds.minimumY) < 8) {
+      path.removeAttribute('tabindex');
+      path.removeAttribute('role');
+      path.removeAttribute('aria-label');
+      path.setAttribute('aria-hidden', 'true');
+      const hit = createSvgElement('circle');
+      hit.dataset.countryHit = country.id;
+      hit.setAttribute('cx', String((bounds.minimumX + bounds.maximumX) / 2));
+      hit.setAttribute('cy', String((bounds.minimumY + bounds.maximumY) / 2));
+      hit.setAttribute('r', '4');
+      hit.setAttribute('fill', 'transparent');
+      hit.setAttribute('stroke', 'none');
+      hit.setAttribute('pointer-events', 'all');
+      hit.setAttribute('tabindex', '0');
+      hit.setAttribute('role', 'button');
+      hit.setAttribute('aria-label', `进入${country.label?.name ?? country.id}`);
+      countriesLayer.append(hit);
+    }
     if (country.label
       && typeof country.label.name === 'string'
       && Number.isFinite(country.label.x)
@@ -243,6 +297,7 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
   }
 
   let state: MapViewState = { zoom: 1, offsetX: 0, offsetY: 0 };
+  let maximumZoom = WORLD_MAX_ZOOM;
   let destroyed = false;
   let dragStart: PointerPosition | undefined;
   let stateAtDragStart: MapViewState | undefined;
@@ -259,7 +314,7 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
   applyTransform();
 
   const setState = (nextState: MapViewState): void => {
-    state = clampState(nextState);
+    state = clampState(nextState, maximumZoom);
     applyTransform();
   };
 
@@ -267,11 +322,14 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
     event.preventDefault();
     const point = eventPoint(svg, event.clientX, event.clientY);
     const factor = Math.exp(-event.deltaY * 0.002);
-    setState(zoomAround(state, state.zoom * factor, point.x, point.y));
+    setState(zoomAround(state, state.zoom * factor, point.x, point.y, maximumZoom));
   };
 
   const onPointerDown = (event: PointerEvent): void => {
     if (event.button !== undefined && event.button !== 0) return;
+    if (event.target instanceof Element && event.target.closest(
+      '[data-country], [data-country-hit], [data-area-id], [data-area-hit], [data-visited-boundary], [data-visited-point]',
+    )) return;
     const pointerId = event.pointerId ?? 1;
     const point = eventPoint(svg, event.clientX, event.clientY);
     pointers.set(pointerId, point);
@@ -299,7 +357,7 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
         pinchDistance = Math.max(distance, 1);
         pinchState = { ...state };
       } else {
-        setState(zoomAround(pinchState, pinchState.zoom * distance / pinchDistance, anchor.x, anchor.y));
+        setState(zoomAround(pinchState, pinchState.zoom * distance / pinchDistance, anchor.x, anchor.y, maximumZoom));
         movedDuringDrag = true;
       }
       return;
@@ -329,6 +387,11 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
       return;
     }
     if (event.target instanceof Element) {
+      const countryHit = event.target.closest<SVGElement>('[data-country-hit]');
+      if (countryHit?.dataset.countryHit && /^[A-Z]{2}$/.test(countryHit.dataset.countryHit)) {
+        options.onCountrySelect?.(countryHit.dataset.countryHit as CountryCode);
+        return;
+      }
       const area = event.target.closest<SVGElement>('[data-area-id]');
       if (area?.dataset.areaId) {
         options.onAreaSelect?.(area.dataset.areaId as AreaId);
@@ -355,6 +418,12 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
 
   const onKeyDown = (event: KeyboardEvent): void => {
     if ((event.key === 'Enter' || event.key === ' ') && event.target instanceof Element) {
+      const countryHit = event.target.closest<SVGElement>('[data-country-hit]');
+      if (countryHit?.dataset.countryHit && /^[A-Z]{2}$/.test(countryHit.dataset.countryHit)) {
+        event.preventDefault();
+        options.onCountrySelect?.(countryHit.dataset.countryHit as CountryCode);
+        return;
+      }
       const area = event.target.closest<SVGElement>('[data-area-id]');
       if (area?.dataset.areaId) {
         event.preventDefault();
@@ -372,10 +441,10 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
     const centerY = MAP_HEIGHT / 2;
     if (event.key === '+' || event.key === '=') {
       event.preventDefault();
-      setState(zoomAround(state, state.zoom * 1.25, centerX, centerY));
+      setState(zoomAround(state, state.zoom * 1.25, centerX, centerY, maximumZoom));
     } else if (event.key === '-') {
       event.preventDefault();
-      setState(zoomAround(state, state.zoom / 1.25, centerX, centerY));
+      setState(zoomAround(state, state.zoom / 1.25, centerX, centerY, maximumZoom));
     } else if (event.key.startsWith('Arrow')) {
       event.preventDefault();
       const step = 40;
@@ -446,6 +515,7 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
     },
     showWorld(summary = []): void {
       if (destroyed) return;
+      maximumZoom = WORLD_MAX_ZOOM;
       areaById.clear();
       boundariesLayer.replaceChildren();
       pointsLayer.replaceChildren();
@@ -463,12 +533,14 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
     },
     showCountry(countryPackage, visitedAreaIds): void {
       if (destroyed) return;
+      maximumZoom = COUNTRY_MAX_ZOOM;
       countriesLayer.style.display = 'none';
       labelsLayer.style.display = 'none';
       pointsLayer.replaceChildren();
       boundariesLayer.replaceChildren();
       areaById.clear();
       svg.setAttribute('aria-label', `${countryPackage.countryCode} ${countryPackage.administrativeScheme}地图，选择城市区域点亮`);
+      fitAreas(countryPackage.features, setState);
       for (const area of countryPackage.features) {
         try {
           const geometry = validateGeometry(area.geometry, { maxVertices: options.maxGeometryVertices ?? 100_000 });
@@ -483,7 +555,7 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
           path.setAttribute('role', 'button');
           path.setAttribute('aria-label', `${visitedAreaIds.has(area.properties.areaId) ? '已点亮' : '点亮'}${areaLabel(area)}`);
           path.classList.add(visitedAreaIds.has(area.properties.areaId) ? 'area-visited' : 'area-unvisited');
-          if (isTinyArea(area)) {
+          if (isTinyArea(area, state.zoom)) {
             const hit = createSvgElement('path');
             hit.dataset.areaHit = area.properties.areaId;
             hit.setAttribute('d', pathData);
@@ -500,7 +572,6 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
           // Runtime packages are validated before rendering; a defensive skip prevents one feature poisoning the map.
         }
       }
-      fitAreas([...areaById.values()], setState);
     },
     getViewState(): Readonly<MapViewState> {
       return Object.freeze({ ...state });

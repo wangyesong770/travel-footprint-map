@@ -7,7 +7,10 @@ import type {
   DatePrecision,
   MultiPolygonGeometry,
   VisitRecord,
+  VisitV2,
 } from '../domain/types';
+import type { AreaId, CountryCode } from '../areas/types';
+import { createVisitV2 } from './migration-types';
 import type { ImportMode, TripRepository } from './trip-store';
 
 export const BACKUP_LIMITS = Object.freeze({
@@ -114,6 +117,56 @@ function parseVisit(value: unknown): VisitRecord {
   return visit;
 }
 
+function parseAreaVisit(value: unknown): VisitV2 {
+  const source = record(value, '行政区到访记录');
+  const snapshot = record(source.areaSnapshot, '行政区快照');
+  const areaId = text(source.areaId, '行政区 ID', 400) as AreaId;
+  const snapshotAreaId = text(snapshot.areaId, '行政区快照 ID', 400) as AreaId;
+  const countryCode = text(snapshot.countryCode, '行政区国家代码', 2) as CountryCode;
+  if (!/^[A-Z]{2}:[^:]+:[^:]+$/u.test(areaId) || snapshotAreaId !== areaId || !/^[A-Z]{2}$/u.test(countryCode) || !areaId.startsWith(`${countryCode}:`)) {
+    throw new Error('行政区 ID 格式无效');
+  }
+  if (!Array.isArray(snapshot.aliases) || snapshot.aliases.length > 100) throw new Error('行政区别名格式无效');
+  const centroid = validatePosition(snapshot.centroid);
+  const createdAt = isoTimestamp(source.createdAt, '创建时间');
+  const updatedAt = isoTimestamp(source.updatedAt, '更新时间');
+  if (Date.parse(updatedAt) < Date.parse(createdAt)) throw new Error('更新时间早于创建时间');
+  let visitedOn: string | undefined;
+  let datePrecision: DatePrecision | undefined;
+  const note = source.note === undefined ? undefined : sanitizeNote(text(source.note, '备注', 500, true));
+  const visitBase: VisitV2 = {
+    areaId,
+    areaSnapshot: {
+      areaId,
+      countryCode,
+      sourceId: text(snapshot.sourceId, '行政区来源 ID', 400),
+      adminLevel: text(snapshot.adminLevel, '行政层级', 100),
+      ...(snapshot.nameZh === undefined ? {} : { nameZh: text(snapshot.nameZh, '行政区中文名', 200) }),
+      nameLocal: text(snapshot.nameLocal, '行政区原名', 200),
+      aliases: snapshot.aliases.map((alias) => text(alias, '行政区别名', 200, true)),
+      centroid,
+    },
+    createdAt,
+    updatedAt,
+  };
+  if (source.visitedOn !== undefined || source.datePrecision !== undefined) {
+    if (typeof source.visitedOn !== 'string' || typeof source.datePrecision !== 'string' || !precisions.has(source.datePrecision as DatePrecision)) {
+      throw new Error('到访日期格式无效');
+    }
+    let validated;
+    try { validated = validateVisitDate(source.visitedOn); } catch { throw new Error('到访日期格式无效'); }
+    if (validated.precision !== source.datePrecision) throw new Error('到访日期精度不一致');
+    visitedOn = validated.value;
+    datePrecision = validated.precision;
+  }
+  return createVisitV2({
+    ...visitBase,
+    ...(visitedOn === undefined ? {} : { visitedOn }),
+    ...(datePrecision === undefined ? {} : { datePrecision }),
+    ...(note === undefined ? {} : { note }),
+  });
+}
+
 function validatePosition(value: unknown): [number, number] {
   if (!Array.isArray(value) || value.length !== 2) throw new Error('边界几何无效');
   return [finite(value[0], '边界经度', -180, 180), finite(value[1], '边界纬度', -90, 90)];
@@ -183,6 +236,13 @@ export function parseBackup(input: string, options: ParseBackupOptions = {}): Ba
   }
   const validator = options.validateGeometry ?? defaultGeometryValidator;
   const boundaries = source.boundaries.map((value) => parseBoundary(value, validator));
+  if (source.areaVisits !== undefined && (!Array.isArray(source.areaVisits) || source.areaVisits.length > BACKUP_LIMITS.maxVisits)) {
+    throw new Error('行政区到访记录格式无效');
+  }
+  const areaVisits = source.areaVisits === undefined ? undefined : source.areaVisits.map(parseAreaVisit);
+  if (areaVisits !== undefined && new Set(areaVisits.map((visit) => visit.areaId)).size !== areaVisits.length) {
+    throw new Error('备份包含重复行政区记录');
+  }
   const boundaryIds = new Set<number>();
   let totalVertices = 0;
   for (const boundary of boundaries) {
@@ -197,16 +257,18 @@ export function parseBackup(input: string, options: ParseBackupOptions = {}): Ba
     title: text(source.title, '地图标题', BACKUP_LIMITS.maxTitleCodePoints, true),
     visits,
     boundaries,
+    ...(areaVisits === undefined ? {} : { areaVisits }),
   };
 }
 
 export async function exportBackup(repository: TripRepository, now: () => string = () => new Date().toISOString()): Promise<BackupV1> {
-  const [title, visits, boundaries] = await Promise.all([
+  const [title, visits, boundaries, areaVisits] = await Promise.all([
     repository.getTitle(),
     repository.listVisits(),
     repository.listBoundaries(),
+    repository.listAreaVisits(),
   ]);
-  return { schemaVersion: 1, exportedAt: now(), title, visits, boundaries };
+  return { schemaVersion: 1, exportedAt: now(), title, visits, boundaries, areaVisits };
 }
 
 export async function mergeBackup(repository: TripRepository, backup: BackupV1, mode: ImportMode = 'merge'): Promise<void> {

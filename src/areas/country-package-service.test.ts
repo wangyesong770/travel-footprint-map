@@ -96,6 +96,24 @@ describe('CountryPackageMemoryRepository', () => {
 });
 
 describe('CountryPackageService', () => {
+  it('invokes the browser default fetch with the global receiver', async () => {
+    const bytes = wirePackage();
+    const responses = [jsonResponse(manifest(manifestEntry(bytes))), bytesResponse(bytes)];
+    const receiverFetch = vi.fn(function (this: unknown): Promise<Response> {
+      if (this !== globalThis) throw new TypeError('Illegal invocation');
+      const response = responses.shift();
+      if (!response) throw new Error('unexpected fetch');
+      return Promise.resolve(response);
+    });
+    vi.stubGlobal('fetch', receiverFetch);
+    try {
+      const result = await new CountryPackageService({ repository: new CountryPackageMemoryRepository() }).load('CN');
+      expect(result.status).toBe('fresh');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('loads the manifest first, verifies SHA-256, stores and returns a fresh package', async () => {
     const bytes = wirePackage();
     const entry = manifestEntry(bytes);
