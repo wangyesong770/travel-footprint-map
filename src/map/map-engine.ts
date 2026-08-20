@@ -555,6 +555,9 @@ export function createMapEngine(svg: SVGSVGElement, options: MapEngineOptions = 
           path.setAttribute('role', 'button');
           path.setAttribute('aria-label', `${visitedAreaIds.has(area.properties.areaId) ? '已点亮' : '点亮'}${areaLabel(area)}`);
           path.classList.add(visitedAreaIds.has(area.properties.areaId) ? 'area-visited' : 'area-unvisited');
+          const title = createSvgElement('title');
+          title.textContent = areaLabel(area);
+          path.append(title);
           if (isTinyArea(area, state.zoom)) {
             const hit = createSvgElement('path');
             hit.dataset.areaHit = area.properties.areaId;

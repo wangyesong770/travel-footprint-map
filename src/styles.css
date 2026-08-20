@@ -298,6 +298,30 @@ ul { margin: 0; padding: 0; list-style: none; }
 
 .visit-list ul { display: grid; gap: .45rem; }
 
+.visit-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: .35rem;
+}
+
+.visit-delete {
+  align-self: stretch;
+  color: #994239;
+  border-color: rgb(189 80 69 / 38%);
+}
+
+.visit-pagination {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: .45rem;
+  margin-top: .65rem;
+  color: #657a75;
+  font-size: .78rem;
+  text-align: center;
+}
+
 .data-actions { display: grid; grid-template-columns: 1fr 1fr; gap: .45rem; margin-top: auto; }
 
 .primary-action { color: #fff; border-color: var(--coral); background: var(--coral); }

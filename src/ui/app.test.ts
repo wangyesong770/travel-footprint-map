@@ -5,6 +5,7 @@ import type { CityIndex } from '../cities/city-index';
 import type { AreaId, CountryBoundaryPackage, CountryCode } from '../areas/types';
 import { sampleCities } from '../cities/sample-data';
 import type { CachedBoundary } from '../domain/types';
+import type { CitySummary, VisitRecord } from '../domain/types';
 import type { MapClick, MapEngine, MapEngineOptions, MapVisit } from '../map/map-engine';
 import { createMemoryTripStore } from '../storage/memory-store';
 import { createApp } from './app';
@@ -13,10 +14,12 @@ import type { AppSnapshot } from './app';
 function setup(cityDependencies: {
   cityIndex?: CityIndex;
   loadCityIndex?: () => Promise<CityIndex>;
+  initialVisits?: VisitRecord[];
 } = { cityIndex: createCityIndex(sampleCities) }) {
   document.body.innerHTML = '<main id="app"></main>';
   const root = document.querySelector<HTMLElement>('#app')!;
   const repository = createMemoryTripStore();
+  for (const visit of cityDependencies.initialVisits ?? []) void repository.putVisit(visit);
   let mapClick: ((point: MapClick) => void) | undefined;
   let countrySelect: ((countryCode: CountryCode) => void) | undefined;
   let areaSelect: ((areaId: AreaId) => void) | undefined;
@@ -125,6 +128,37 @@ describe('travel map app', () => {
       datePrecision: 'month',
       note: '城堡散步',
     });
+  });
+
+  it('maps a searched Chinese city to its administrative area and focuses it', async () => {
+    const guangzhou: CitySummary = {
+      id: 1,
+      name: 'Guangzhou',
+      asciiName: 'Guangzhou',
+      aliases: ['广州'],
+      zhName: '广州',
+      countryCode: 'CN',
+      continentCode: 'AS',
+      admin1: '30',
+      lon: 10,
+      lat: 20,
+      population: 18_000_000,
+    };
+    const view = setup({ cityIndex: createCityIndex([guangzhou]) });
+    await view.app.ready;
+
+    fireEvent.input(getByLabelText(view.root, '搜索城市'), { target: { value: '广州' } });
+    fireEvent.click(getByRole(view.root, 'button', { name: /点亮广州/ }));
+    await view.app.whenIdle();
+
+    expect(await view.repository.listVisits()).toHaveLength(0);
+    expect(await view.repository.getAreaVisit('CN:overture:test-city')).toBeTruthy();
+    expect(view.mapEngine.showCountry).toHaveBeenLastCalledWith(
+      expect.objectContaining({ countryCode: 'CN' }),
+      new Set(['CN:overture:test-city']),
+    );
+    expect(view.mapEngine.focusArea).toHaveBeenCalledWith('CN:overture:test-city');
+    expect(getByRole(view.root, 'heading', { name: '测试市 · Test City' })).toBeTruthy();
   });
 
   it('renders an inviting empty state and zeroed statistics', async () => {
@@ -243,6 +277,54 @@ describe('travel map app', () => {
     fireEvent.click(getByRole(view.root, 'button', { name: '撤销删除' }));
     await view.app.whenIdle();
     expect(await view.repository.listVisits()).toHaveLength(1);
+  });
+
+  it('deletes an administrative-area footprint from recent history and offers undo', async () => {
+    const view = setup();
+    await view.app.ready;
+    view.selectCountry('CN');
+    await view.app.whenIdle();
+    view.selectArea('CN:overture:test-city');
+    await view.app.whenIdle();
+
+    fireEvent.click(getByRole(view.root, 'button', { name: '删除测试市的足迹' }));
+    fireEvent.click(getByRole(view.root, 'button', { name: '确认删除' }));
+    await view.app.whenIdle();
+
+    expect(await view.repository.listAreaVisits()).toHaveLength(0);
+    expect(queryByText(view.root, '测试市 · Test City')).toBeNull();
+    fireEvent.click(getByRole(view.root, 'button', { name: '撤销删除' }));
+    await view.app.whenIdle();
+    expect(await view.repository.listAreaVisits()).toHaveLength(1);
+  });
+
+  it('paginates the combined footprint history', async () => {
+    const initialVisits = Array.from({ length: 7 }, (_, index): VisitRecord => ({
+      cityId: 10_000 + index,
+      citySnapshot: {
+        id: 10_000 + index,
+        name: `City ${index + 1}`,
+        asciiName: `City ${index + 1}`,
+        aliases: [],
+        countryCode: 'US',
+        continentCode: 'NA',
+        admin1: 'CA',
+        lon: -120 + index,
+        lat: 35,
+      },
+      createdAt: `2026-08-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+      updatedAt: `2026-08-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+    }));
+    const view = setup({ cityIndex: createCityIndex(sampleCities), initialVisits });
+    await view.app.ready;
+
+    expect(getByText(view.root, '第 1 / 2 页')).toBeTruthy();
+    expect(getByText(view.root, 'City 7')).toBeTruthy();
+    expect(queryByText(view.root, 'City 1')).toBeNull();
+    fireEvent.click(getByRole(view.root, 'button', { name: '下一页足迹' }));
+    expect(getByText(view.root, '第 2 / 2 页')).toBeTruthy();
+    expect(getByText(view.root, 'City 1')).toBeTruthy();
+    expect(queryByText(view.root, 'City 7')).toBeNull();
   });
 
   it('persists a custom title and requests both poster layouts', async () => {

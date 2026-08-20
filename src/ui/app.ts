@@ -4,6 +4,7 @@ import type { AreaId, CountryBoundaryPackage, CountryCode } from '../areas/types
 import { sanitizeNote, validateVisitDate } from '../domain/validation';
 import type { CachedBoundary, CitySummary, TravelStats, VisitRecord, VisitV2 } from '../domain/types';
 import type { MapClick, MapEngine, MapEngineOptions, MapVisit } from '../map/map-engine';
+import { findContainingAreas } from '../map/geometry';
 import { exportBackup, parseBackup } from '../storage/backup';
 import { calculateStats } from '../storage/statistics';
 import type { TripRepository } from '../storage/trip-store';
@@ -56,6 +57,11 @@ interface AppElements {
 }
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+const HISTORY_PAGE_SIZE = 6;
+
+type DeletedFootprint =
+  | { kind: 'city'; visit: VisitRecord; boundary?: CachedBoundary }
+  | { kind: 'area'; visit: VisitV2 };
 
 function button(label: string, className?: string): HTMLButtonElement {
   const element = document.createElement('button');
@@ -169,7 +175,8 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
   let selectedCityId: number | undefined;
   let selectedAreaId: AreaId | undefined;
   let deletionPending = false;
-  let lastDeleted: { visit: VisitRecord; boundary?: CachedBoundary } | undefined;
+  let lastDeleted: DeletedFootprint | undefined;
+  let historyPage = 1;
   let pendingImport: ReturnType<typeof parseBackup> | undefined;
   let activeCountry: CountryBoundaryPackage | undefined;
   let confirmingReplace = false;
@@ -310,29 +317,48 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
     const heading = document.createElement('h2');
     heading.textContent = '最近足迹';
     const list = document.createElement('ul');
-    for (const visit of [...areaVisits].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))) {
-      const item = document.createElement('li');
-      const name = visit.areaSnapshot.nameZh && visit.areaSnapshot.nameZh !== visit.areaSnapshot.nameLocal
-        ? `${visit.areaSnapshot.nameZh} · ${visit.areaSnapshot.nameLocal}`
-        : visit.areaSnapshot.nameZh ?? visit.areaSnapshot.nameLocal;
-      const edit = button(`编辑${visit.areaSnapshot.nameZh ?? visit.areaSnapshot.nameLocal}`);
-      edit.className = 'visit-card';
-      edit.setAttribute('aria-label', `编辑${visit.areaSnapshot.nameZh ?? visit.areaSnapshot.nameLocal}`);
-      const strong = document.createElement('strong');
-      strong.textContent = name;
-      const meta = document.createElement('small');
-      meta.textContent = [visit.visitedOn, visit.areaSnapshot.countryCode].filter(Boolean).join(' · ');
-      edit.replaceChildren(strong, meta);
-      edit.addEventListener('click', () => {
-        selectedCityId = undefined;
-        selectedAreaId = visit.areaId;
-        renderEditor();
-        mapEngine.focusArea(visit.areaId);
-      });
-      item.append(edit);
-      list.append(item);
-    }
-    for (const visit of [...visits].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))) {
+    const history = [
+      ...areaVisits.map((visit) => ({ kind: 'area' as const, visit, updatedAt: visit.updatedAt })),
+      ...visits.map((visit) => ({ kind: 'city' as const, visit, updatedAt: visit.updatedAt })),
+    ].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    const pageCount = Math.max(1, Math.ceil(history.length / HISTORY_PAGE_SIZE));
+    historyPage = Math.min(historyPage, pageCount);
+    const page = history.slice((historyPage - 1) * HISTORY_PAGE_SIZE, historyPage * HISTORY_PAGE_SIZE);
+    for (const entry of page) {
+      if (entry.kind === 'area') {
+        const visit = entry.visit;
+        const item = document.createElement('li');
+        const name = visit.areaSnapshot.nameZh && visit.areaSnapshot.nameZh !== visit.areaSnapshot.nameLocal
+          ? `${visit.areaSnapshot.nameZh} · ${visit.areaSnapshot.nameLocal}`
+          : visit.areaSnapshot.nameZh ?? visit.areaSnapshot.nameLocal;
+        const edit = button(`编辑${visit.areaSnapshot.nameZh ?? visit.areaSnapshot.nameLocal}`);
+        edit.className = 'visit-card';
+        edit.setAttribute('aria-label', `编辑${visit.areaSnapshot.nameZh ?? visit.areaSnapshot.nameLocal}`);
+        const strong = document.createElement('strong');
+        strong.textContent = name;
+        const meta = document.createElement('small');
+        meta.textContent = [visit.visitedOn, visit.areaSnapshot.countryCode].filter(Boolean).join(' · ');
+        edit.replaceChildren(strong, meta);
+        edit.addEventListener('click', () => {
+          selectedCityId = undefined;
+          selectedAreaId = visit.areaId;
+          deletionPending = false;
+          renderEditor();
+          mapEngine.focusArea(visit.areaId);
+        });
+        const remove = button('删除', 'visit-delete');
+        remove.setAttribute('aria-label', `删除${visit.areaSnapshot.nameZh ?? visit.areaSnapshot.nameLocal}的足迹`);
+        remove.addEventListener('click', () => {
+          selectedCityId = undefined;
+          selectedAreaId = visit.areaId;
+          deletionPending = true;
+          renderEditor();
+        });
+        item.append(edit, remove);
+        list.append(item);
+        continue;
+      }
+      const visit = entry.visit;
       const item = document.createElement('li');
       const edit = button(`编辑${visit.citySnapshot.zhName ?? visit.citySnapshot.name}`);
       edit.className = 'visit-card';
@@ -343,14 +369,47 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
       meta.textContent = [visit.visitedOn, visit.citySnapshot.countryCode].filter(Boolean).join(' · ');
       edit.replaceChildren(name, meta);
       edit.addEventListener('click', () => {
+        selectedAreaId = undefined;
         selectedCityId = visit.cityId;
+        deletionPending = false;
         renderEditor();
         mapEngine.focusCity(visit.citySnapshot);
       });
-      item.append(edit);
+      const remove = button('删除', 'visit-delete');
+      remove.setAttribute('aria-label', `删除${visit.citySnapshot.zhName ?? visit.citySnapshot.name}的足迹`);
+      remove.addEventListener('click', () => {
+        selectedAreaId = undefined;
+        selectedCityId = visit.cityId;
+        deletionPending = true;
+        renderEditor();
+      });
+      item.append(edit, remove);
       list.append(item);
     }
     elements.visitList.append(heading, list);
+    if (pageCount > 1) {
+      const pagination = document.createElement('nav');
+      pagination.className = 'visit-pagination';
+      pagination.setAttribute('aria-label', '足迹分页');
+      const previous = button('上一页');
+      previous.setAttribute('aria-label', '上一页足迹');
+      previous.disabled = historyPage === 1;
+      previous.addEventListener('click', () => {
+        historyPage -= 1;
+        renderVisits();
+      });
+      const indicator = document.createElement('span');
+      indicator.textContent = `第 ${historyPage} / ${pageCount} 页`;
+      const next = button('下一页');
+      next.setAttribute('aria-label', '下一页足迹');
+      next.disabled = historyPage === pageCount;
+      next.addEventListener('click', () => {
+        historyPage += 1;
+        renderVisits();
+      });
+      pagination.append(previous, indicator, next);
+      elements.visitList.append(pagination);
+    }
   }
 
   function renderEditor(): void {
@@ -475,17 +534,45 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
         setStatus(error instanceof Error ? error.message : '记录保存失败', 'error');
       }
     })()));
-    elements.editor.append(heading, dateLabel, noteLabel, save);
+    const remove = button('删除这座城市', 'danger-action');
+    remove.addEventListener('click', () => {
+      deletionPending = true;
+      renderEditor();
+    });
+    elements.editor.append(heading, dateLabel, noteLabel, save, remove);
+    if (deletionPending) {
+      const warning = document.createElement('p');
+      warning.textContent = '删除后可在本次页面内撤销。';
+      const confirm = button('确认删除', 'danger-action');
+      const cancel = button('取消');
+      confirm.addEventListener('click', () => void track(deleteSelectedArea(visit)));
+      cancel.addEventListener('click', () => {
+        deletionPending = false;
+        renderEditor();
+      });
+      elements.editor.append(warning, confirm, cancel);
+    }
   }
 
   async function deleteSelected(visit: VisitRecord): Promise<void> {
     const boundary = boundaries.find((candidate) => candidate.cityId === visit.cityId);
     await dependencies.repository.deleteVisit(visit.cityId);
     if (boundary) await dependencies.repository.deleteBoundary(visit.cityId);
-    lastDeleted = boundary ? { visit, boundary } : { visit };
+    lastDeleted = boundary ? { kind: 'city', visit, boundary } : { kind: 'city', visit };
     visits = visits.filter((candidate) => candidate.cityId !== visit.cityId);
     boundaries = boundaries.filter((candidate) => candidate.cityId !== visit.cityId);
     selectedCityId = undefined;
+    deletionPending = false;
+    render();
+    renderUndo();
+    setStatus('城市已删除');
+  }
+
+  async function deleteSelectedArea(visit: VisitV2): Promise<void> {
+    await dependencies.repository.deleteAreaVisit(visit.areaId);
+    lastDeleted = { kind: 'area', visit };
+    areaVisits = areaVisits.filter((candidate) => candidate.areaId !== visit.areaId);
+    selectedAreaId = undefined;
     deletionPending = false;
     render();
     renderUndo();
@@ -499,10 +586,15 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
     undo.addEventListener('click', () => void track((async () => {
       if (!lastDeleted) return;
       const restored = lastDeleted;
-      await dependencies.repository.putVisit(restored.visit);
-      if (restored.boundary) await dependencies.repository.putBoundary(restored.boundary);
-      visits = [...visits, restored.visit];
-      if (restored.boundary) boundaries = [...boundaries, restored.boundary];
+      if (restored.kind === 'area') {
+        await dependencies.repository.putAreaVisit(restored.visit);
+        areaVisits = [...areaVisits, restored.visit];
+      } else {
+        await dependencies.repository.putVisit(restored.visit);
+        if (restored.boundary) await dependencies.repository.putBoundary(restored.boundary);
+        visits = [...visits, restored.visit];
+        if (restored.boundary) boundaries = [...boundaries, restored.boundary];
+      }
       lastDeleted = undefined;
       render();
       renderUndo();
@@ -692,6 +784,20 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
     elements.search.value = '';
     elements.searchResults.replaceChildren();
     elements.nearby.replaceChildren();
+    try {
+      const countryResult = await dependencies.loadCountry(city.countryCode as CountryCode, abortController.signal);
+      if (countryResult.status !== 'unavailable') {
+        const matches = findContainingAreas([city.lon, city.lat], countryResult.package);
+        if (matches.length > 0) {
+          activeCountry = countryResult.package;
+          historyPage = 1;
+          await selectArea(matches[0]!.properties.areaId);
+          return;
+        }
+      }
+    } catch {
+      // Countries without a usable administrative package keep the legacy point/boundary flow.
+    }
     const existing = visits.find((visit) => visit.cityId === city.id);
     if (existing) {
       selectedCityId = existing.cityId;
@@ -708,6 +814,7 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
     try {
       await dependencies.repository.putVisit(visit);
       visits = [...visits, visit];
+      historyPage = 1;
       selectedCityId = city.id;
       render();
       setStatus(`${city.zhName ?? city.name}已点亮，正在获取城市边界`);

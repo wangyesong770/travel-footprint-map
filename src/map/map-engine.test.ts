@@ -257,6 +257,8 @@ describe('SVG map engine', () => {
     expect(visited.classList.contains('area-visited')).toBe(true);
     expect(unvisited.classList.contains('area-unvisited')).toBe(true);
     expect(visited.getAttribute('aria-label')).toContain('北京');
+    expect(visited.querySelector('title')?.textContent).toBe('北京 · Beijing');
+    expect(unvisited.querySelector('title')?.textContent).toBe('上海 · Shanghai');
 
     visited.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     visited.dispatchEvent(new MouseEvent('click', { bubbles: true }));
