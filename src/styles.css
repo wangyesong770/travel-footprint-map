@@ -225,7 +225,6 @@ ul { margin: 0; padding: 0; list-style: none; }
   fill-opacity: .96;
   stroke: #176a64;
   stroke-width: 1.35;
-  filter: drop-shadow(0 0 5px rgb(23 106 100 / 32%));
 }
 
 [data-map-labels] text {
