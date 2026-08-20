@@ -9,7 +9,8 @@ import { calculateStats } from '../storage/statistics';
 import type { TripRepository } from '../storage/trip-store';
 
 export interface AppDependencies {
-  cityIndex: CityIndex;
+  cityIndex?: CityIndex;
+  loadCityIndex?: () => Promise<CityIndex>;
   repository: TripRepository;
   createMap(svg: SVGSVGElement, options: MapEngineOptions): MapEngine;
   fetchBoundary(city: CitySummary, signal: AbortSignal): Promise<CachedBoundary | undefined>;
@@ -175,9 +176,12 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
   let destroyed = false;
   const pending = new Set<Promise<unknown>>();
   const abortController = new AbortController();
+  let cityIndexPromise: Promise<CityIndex> | undefined;
   const mapEngine = dependencies.createMap(elements.map, {
     onMapClick: (point) => {
-      if (activeCountry === undefined) showNearby(point);
+      if (activeCountry !== undefined) return;
+      if (dependencies.cityIndex !== undefined) renderNearby(point, dependencies.cityIndex);
+      else void track(showNearby(point));
     },
     onCountrySelect: (countryCode) => void track(enterCountry(countryCode)),
     onAreaSelect: (areaId) => void track(selectArea(areaId)),
@@ -212,6 +216,13 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
   function setStatus(message: string, kind: 'normal' | 'error' = 'normal'): void {
     elements.status.textContent = message;
     elements.status.dataset.kind = kind;
+  }
+
+  function getCityIndex(): Promise<CityIndex> {
+    if (dependencies.cityIndex !== undefined) return Promise.resolve(dependencies.cityIndex);
+    if (dependencies.loadCityIndex === undefined) return Promise.reject(new Error('城市索引加载器不可用'));
+    cityIndexPromise ??= dependencies.loadCityIndex();
+    return cityIndexPromise;
   }
 
   function renderNavigation(): void {
@@ -655,14 +666,26 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
     }
   }
 
-  function showNearby(point: MapClick): void {
-    const nearby = dependencies.cityIndex.nearest(point.lon, point.lat, 5);
+  function renderNearby(point: MapClick, cityIndex: CityIndex): void {
+    const nearby = cityIndex.nearest(point.lon, point.lat, 5);
     elements.nearby.replaceChildren();
     const heading = document.createElement('h2');
     heading.textContent = '选择附近城市';
     const list = document.createElement('ul');
-    for (const city of nearby) appendCityButton(list, city, () => void addCity(city));
+    for (const city of nearby) appendCityButton(list, city, () => void track(addCity(city)));
     elements.nearby.append(heading, list);
+  }
+
+  async function showNearby(point: MapClick): Promise<void> {
+    setStatus('正在加载城市目录');
+    try {
+      const cityIndex = await getCityIndex();
+      if (destroyed) return;
+      renderNearby(point, cityIndex);
+      setStatus('');
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '城市目录加载失败，请重试', 'error');
+    }
   }
 
   async function addCity(city: CitySummary): Promise<void> {
@@ -713,10 +736,29 @@ export function createApp(root: HTMLElement, dependencies: AppDependencies): Tra
     }
   }
 
-  elements.search.addEventListener('input', () => {
-    const results = dependencies.cityIndex.search(elements.search.value, 12);
+  function renderSearchResults(query: string, cityIndex: CityIndex): void {
     elements.searchResults.replaceChildren();
+    if (!query.trim()) return;
+    const results = cityIndex.search(query, 12);
     for (const city of results) appendCityButton(elements.searchResults, city, () => void track(addCity(city)));
+  }
+
+  async function updateSearchResults(query: string): Promise<void> {
+    setStatus('正在加载城市目录');
+    try {
+      const cityIndex = await getCityIndex();
+      if (destroyed || elements.search.value !== query) return;
+      renderSearchResults(query, cityIndex);
+      setStatus('');
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '城市目录加载失败，请重试', 'error');
+    }
+  }
+
+  elements.search.addEventListener('input', () => {
+    const query = elements.search.value;
+    if (dependencies.cityIndex !== undefined) renderSearchResults(query, dependencies.cityIndex);
+    else void track(updateSearchResults(query));
   });
   elements.title.addEventListener('change', () => {
     const nextTitle = elements.title.value.trim().slice(0, 120) || '我的世界足迹';

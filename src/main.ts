@@ -11,15 +11,18 @@ import {
 } from './boundaries/nominatim-provider';
 import { createCityIndex } from './cities/city-index';
 import { exportPosterPng } from './export/poster';
-import {
-  CITIES,
-  CITY_DATA_ATTRIBUTION,
-  CITY_DATA_SOURCE_DATE,
-} from './generated/cities.data';
 import { WORLD_MAP } from './generated/world-map';
 import { createMapEngine } from './map/map-engine';
 import { createTripStore } from './storage/trip-store';
 import { createApp } from './ui/app';
+
+const CITY_DATA_ATTRIBUTION = 'GeoNames geographical database, licensed under CC BY 4.0 (https://www.geonames.org/).';
+const CITY_DATA_SOURCE_DATE = '2026-08-16';
+
+async function loadCityIndex() {
+  const { CITIES } = await import('./generated/cities.data');
+  return createCityIndex(CITIES);
+}
 
 async function start(): Promise<void> {
   const root = document.querySelector<HTMLElement>('#app');
@@ -35,7 +38,7 @@ async function start(): Promise<void> {
       repository: new CountryPackageMemoryRepository(),
     });
     const app = createApp(root, {
-      cityIndex: createCityIndex(CITIES),
+      loadCityIndex,
       repository,
       createMap: createMapEngine,
       fetchBoundary: async (city, signal) => boundaryForUi(await boundaries.fetchForCity(city, signal)),

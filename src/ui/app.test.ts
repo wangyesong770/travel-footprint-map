@@ -1,6 +1,7 @@
 import { fireEvent, getByLabelText, getByRole, getByText, queryByText } from '@testing-library/dom';
 
 import { createCityIndex } from '../cities/city-index';
+import type { CityIndex } from '../cities/city-index';
 import type { AreaId, CountryBoundaryPackage, CountryCode } from '../areas/types';
 import { sampleCities } from '../cities/sample-data';
 import type { CachedBoundary } from '../domain/types';
@@ -9,7 +10,10 @@ import { createMemoryTripStore } from '../storage/memory-store';
 import { createApp } from './app';
 import type { AppSnapshot } from './app';
 
-function setup() {
+function setup(cityDependencies: {
+  cityIndex?: CityIndex;
+  loadCityIndex?: () => Promise<CityIndex>;
+} = { cityIndex: createCityIndex(sampleCities) }) {
   document.body.innerHTML = '<main id="app"></main>';
   const root = document.querySelector<HTMLElement>('#app')!;
   const repository = createMemoryTripStore();
@@ -33,7 +37,7 @@ function setup() {
   const saveBlob = vi.fn();
   const chooseBackupText = vi.fn(async (): Promise<string | undefined> => undefined);
   const app = createApp(root, {
-    cityIndex: createCityIndex(sampleCities),
+    ...cityDependencies,
     repository,
     createMap(_svg: SVGSVGElement, options: MapEngineOptions) {
       mapClick = options.onMapClick;
@@ -148,6 +152,24 @@ describe('travel map app', () => {
     expect(getByText(view.root, '1 座城市')).toBeTruthy();
     expect(queryByText(view.root, '从第一座城市开始')).toBeNull();
     expect(view.boundary).toHaveBeenCalledOnce();
+  });
+
+  it('loads the large city index only after the first city interaction and reuses it', async () => {
+    const loadCityIndex = vi.fn(async () => createCityIndex(sampleCities));
+    const view = setup({ loadCityIndex });
+    await view.app.ready;
+
+    expect(loadCityIndex).not.toHaveBeenCalled();
+    const search = getByLabelText(view.root, '搜索城市');
+    fireEvent.input(search, { target: { value: '慕尼黑' } });
+    await view.app.whenIdle();
+
+    expect(loadCityIndex).toHaveBeenCalledOnce();
+    expect(getByRole(view.root, 'button', { name: /点亮慕尼黑/ })).toBeTruthy();
+
+    fireEvent.input(search, { target: { value: 'munich' } });
+    await view.app.whenIdle();
+    expect(loadCityIndex).toHaveBeenCalledOnce();
   });
 
   it('shows nearby candidates after a map click before lighting a city', async () => {
